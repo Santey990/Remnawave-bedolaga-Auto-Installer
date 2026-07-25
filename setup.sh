@@ -58,7 +58,6 @@ install_docker() {
 # Проверка наличия Caddy
 check_caddy_installed() {
     if [ -d "/opt/remnawave/caddy" ] && [ -f "/opt/remnawave/caddy/docker-compose.yml" ]; then
-        # Проверяем, запущен ли контейнер caddy
         if docker ps --format '{{.Names}}' | grep -q "^caddy$"; then
             return 0
         else
@@ -69,7 +68,7 @@ check_caddy_installed() {
     fi
 }
 
-# Гарантируем запуск Caddy (если не установлен - предлагаем установить)
+# Гарантируем запуск Caddy
 ensure_caddy_running() {
     if ! check_caddy_installed; then
         echo -e "${YELLOW}⚠️  Caddy не установлен или не запущен.${NC}"
@@ -82,7 +81,6 @@ ensure_caddy_running() {
             mkdir -p /opt/remnawave/caddy
             cd /opt/remnawave/caddy
             
-            # Создаём docker-compose для Caddy
             cat > docker-compose.yml <<EOF
 services:
     caddy:
@@ -110,13 +108,8 @@ volumes:
         name: caddy-ssl-data
 EOF
 
-            # Инициализируем блоки
             init_caddy_blocks
-            
-            # Создаём Caddyfile
             rebuild_caddyfile
-            
-            # Запускаем Caddy
             docker compose up -d
             echo -e "${GREEN}✅ Caddy установлен и запущен.${NC}"
         else
@@ -242,7 +235,7 @@ install_panel() {
 services:
     caddy:
         image: caddy:2.9
-        container_name: 'caddy'
+        container_name: caddy
         hostname: caddy
         restart: always
         ports:
@@ -593,7 +586,6 @@ install_cabinet() {
 
     CABINET_JWT_SECRET=$(openssl rand -hex 32)
 
-    # Добавляем настройки в .env бота
     cd /opt/bedolaga-bot
     if ! grep -q "CABINET_ENABLED=true" .env; then
         cat >> .env <<EOF
@@ -629,7 +621,6 @@ EOF
     mkdir -p /srv/cabinet
     cp -r ./cabinet-dist/* /srv/cabinet/
 
-    # Caddy блок
     CABINET_BLOCK="https://$CABINET_DOMAIN {
     encode gzip zstd
     handle /api/* {
@@ -645,12 +636,9 @@ EOF
     cd /opt/remnawave/caddy
     docker compose down && docker compose up -d
 
-    # Запуск контейнера Cabinet
     cd /opt/bedolaga-cabinet
     docker compose up -d
 
-    # Подключение сети
-    echo -e "${YELLOW}🔗 Подключаем Cabinet к сети Caddy...${NC}"
     docker network connect bedolaga-cabinet_default caddy 2>/dev/null || true
 
     echo -e "${GREEN}✅ MiniAPP (Cabinet) успешно установлен!${NC}"
@@ -689,7 +677,6 @@ setup_caddy_for_bedolaga() {
     show_logo
     echo -e "${BLUE}${BOLD}🌐 Настройка Caddy для Bedolaga Bot + Cabinet${NC}\n"
 
-    # Проверка наличия бота
     if [ ! -d "/opt/bedolaga-bot" ]; then
         echo -e "${RED}❌ Bedolaga Bot не установлен (нет /opt/bedolaga-bot).${NC}"
         echo -e "Сначала установите бота через пункт меню 2 → 1."
@@ -697,31 +684,21 @@ setup_caddy_for_bedolaga() {
         return
     fi
 
-    # Проверка наличия Caddy
     if ! ensure_caddy_running; then
         return
     fi
 
-    # Определяем домены
     blocks_dir="/opt/remnawave/caddy/blocks"
     BOT_DOMAIN=""
     CABINET_DOMAIN=""
 
-    # Сканируем существующие блоки
     if [ -d "$blocks_dir" ]; then
         for block_file in "$blocks_dir"/*; do
             if [ -f "$block_file" ]; then
                 block_content=$(cat "$block_file")
-                # Ищем блок для бота (прокси на remnawave_bot:8080)
-                if echo "$block_content" | grep -q "reverse_proxy remnawave_bot:8080"; then
-                    # Если уже есть блок для бота, не перезаписываем, если только это не блок кабинета
-                    # Но блок кабинета тоже может иметь reverse_proxy remnawave_bot:8080 для /api
-                    # Поэтому проверяем, есть ли handle /api/* в блоке - если есть, это кабинет
-                    if ! echo "$block_content" | grep -q "handle /api/\*"; then
-                        BOT_DOMAIN=$(basename "$block_file")
-                    fi
+                if echo "$block_content" | grep -q "reverse_proxy remnawave_bot:8080" && ! echo "$block_content" | grep -q "handle /api/\*"; then
+                    BOT_DOMAIN=$(basename "$block_file")
                 fi
-                # Ищем блок для кабинета (прокси на cabinet_frontend:80 или file_server)
                 if echo "$block_content" | grep -q "reverse_proxy cabinet_frontend:80" || echo "$block_content" | grep -q "file_server /srv/cabinet"; then
                     CABINET_DOMAIN=$(basename "$block_file")
                 fi
@@ -729,17 +706,14 @@ setup_caddy_for_bedolaga() {
         done
     fi
 
-    # Если не нашли домен бота, пробуем вытянуть из .env бота
     if [ -z "$BOT_DOMAIN" ] && [ -f "/opt/bedolaga-bot/.env" ]; then
         BOT_DOMAIN=$(grep -E "^WEBHOOK_URL=" /opt/bedolaga-bot/.env | sed -E 's|^WEBHOOK_URL=https?://([^:/]+).*$|\1|')
     fi
 
-    # Если не нашли домен кабинета, пробуем из .env кабинета
     if [ -z "$CABINET_DOMAIN" ] && [ -f "/opt/bedolaga-cabinet/.env" ]; then
         CABINET_DOMAIN=$(grep -E "^VITE_API_URL=" /opt/bedolaga-cabinet/.env | sed -E 's|^.*//([^:/]+).*$|\1|')
     fi
 
-    # Если всё ещё пусто – запрашиваем вручную
     if [ -z "$BOT_DOMAIN" ]; then
         echo -e "${YELLOW}Не удалось автоматически определить домен для бота.${NC}"
         read -p "🌐 Введите домен для Bedolaga Bot (например bot.myvpn.com): " BOT_DOMAIN
@@ -763,7 +737,6 @@ setup_caddy_for_bedolaga() {
         fi
     fi
 
-    # Выводим пользователю найденные/введённые домены и просим подтверждения
     echo -e "\n${CYAN}${BOLD}Найденные домены:${NC}"
     echo -e "  🤖 Бот:      ${BOLD}$BOT_DOMAIN${NC}"
     if [ -n "$CABINET_DOMAIN" ]; then
@@ -781,10 +754,8 @@ setup_caddy_for_bedolaga() {
         fi
     fi
 
-    # Создаём блоки Caddy
     echo -e "\n${YELLOW}🔧 Добавляем/обновляем блоки Caddy...${NC}"
 
-    # Блок для бота (прокси на remnawave_bot:8080)
     BOT_BLOCK="https://$BOT_DOMAIN {
     encode gzip zstd
     handle {
@@ -799,11 +770,7 @@ setup_caddy_for_bedolaga() {
 }"
     add_caddy_block "$BOT_DOMAIN" "$BOT_BLOCK"
 
-    # Блок для кабинета, если задан
     if [ -n "$CABINET_DOMAIN" ]; then
-        # Определяем, как раздаётся кабинет: через контейнер cabinet_frontend или статика
-        # Если есть папка /srv/cabinet с файлами, используем file_server
-        # Иначе используем reverse_proxy на cabinet_frontend:80
         if [ -d "/srv/cabinet" ] && [ -f "/srv/cabinet/index.html" ]; then
             CABINET_BLOCK="https://$CABINET_DOMAIN {
     encode gzip zstd
@@ -831,7 +798,26 @@ setup_caddy_for_bedolaga() {
         add_caddy_block "$CABINET_DOMAIN" "$CABINET_BLOCK"
     fi
 
-    # Перезапускаем Caddy
+    # === АВТОМАТИЧЕСКОЕ ПОДКЛЮЧЕНИЕ Caddy К СЕТЯМ БОТА И КАБИНЕТА ===
+    echo -e "${YELLOW}🔗 Подключаем Caddy к сетям бота и кабинета...${NC}"
+    
+    BOT_NET=$(docker inspect remnawave_bot --format='{{range $key, $value := .NetworkSettings.Networks}}{{$key}}{{end}}' 2>/dev/null)
+    CABINET_NET=$(docker inspect cabinet_frontend --format='{{range $key, $value := .NetworkSettings.Networks}}{{$key}}{{end}}' 2>/dev/null)
+    
+    if [ -n "$BOT_NET" ]; then
+        docker network connect "$BOT_NET" caddy 2>/dev/null || true
+        echo -e "${GREEN}✅ Caddy подключён к сети бота: $BOT_NET${NC}"
+    else
+        echo -e "${YELLOW}⚠️ Не удалось определить сеть бота.${NC}"
+    fi
+    
+    if [ -n "$CABINET_NET" ]; then
+        docker network connect "$CABINET_NET" caddy 2>/dev/null || true
+        echo -e "${GREEN}✅ Caddy подключён к сети кабинета: $CABINET_NET${NC}"
+    else
+        echo -e "${YELLOW}⚠️ Не удалось определить сеть кабинета.${NC}"
+    fi
+
     echo -e "${YELLOW}🔄 Перезапускаем Caddy...${NC}"
     cd /opt/remnawave/caddy
     if [ -f "docker-compose.yml" ]; then
@@ -845,7 +831,6 @@ setup_caddy_for_bedolaga() {
         return
     fi
 
-    # Дополнительно: проверяем .env бота на наличие переменных для Cabinet
     if [ -n "$CABINET_DOMAIN" ] && [ -f "/opt/bedolaga-bot/.env" ]; then
         if ! grep -q "CABINET_ENABLED=true" /opt/bedolaga-bot/.env; then
             echo -e "${YELLOW}⚠️  В .env бота отсутствуют настройки Cabinet. Добавляем...${NC}"
