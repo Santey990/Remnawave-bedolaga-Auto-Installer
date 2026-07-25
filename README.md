@@ -1,3 +1,12 @@
 # Remnawave-bedolaga-Auto-Installer
 
-bash <(curl -Ls https://github.com/Santey990/Remnawave-bedolaga-Auto-Installer/setup.sh)
+    
+    https://github.com/Santey990/Remnawave-bedolaga-Auto-Installer/blob/main/setup.sh
+
+    Прямая ссылка для скачивания:
+    https://raw.githubusercontent.com/Santey990/Remnawave-bedolaga-Auto-Installer/main/setup.sh
+
+    Команда запуска:
+    bash <(curl -Ls https://raw.githubusercontent.com/Santey990/Remnawave-bedolaga-Auto-Installer/main/setup.sh)
+
+
