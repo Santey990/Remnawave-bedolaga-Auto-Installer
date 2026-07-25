@@ -3,7 +3,8 @@
 # ============================================
 # Just Remnawave Auto Installer
 # Author: tneangel
-# Repository: https://github.com/tneange1/Just-Remnawave-Auto-Installer
+# Modified by Santey990
+# Repository: https://github.com/Santey990/Remnawave-bedolaga-Auto-Installer
 # ============================================
 
 # Цвета
@@ -25,7 +26,7 @@ fi
 create_alias() {
     if [ ! -f /usr/local/bin/rw-installer ]; then
         echo -e "${YELLOW}📥 Скачиваем скрипт для глобального доступа...${NC}"
-        curl -Ls https://raw.githubusercontent.com/tneange1/Just-Remnawave-Auto-Installer/main/setup.sh -o /usr/local/bin/rw-installer
+        curl -Ls https://raw.githubusercontent.com/Santey990/Remnawave-bedolaga-Auto-Installer/main/setup.sh -o /usr/local/bin/rw-installer
         chmod +x /usr/local/bin/rw-installer
         echo -e "${GREEN}✅ Создан глобальный алиас: теперь можно запускать командой ${BOLD}rw-installer${NC}${GREEN} из любой директории.${NC}"
     fi
@@ -35,9 +36,9 @@ create_alias() {
 show_logo() {
     clear
     echo -e "${CYAN}${BOLD}"
-    echo "  ╔════════════════════════════════════════════════════╗"
-    echo "  ║   ⚡ Just Remnawave Auto Installer by tneangel    ║"
-    echo "  ╚════════════════════════════════════════════════════╝"
+    echo "  ╔═══════════════════════════════════════════════════════════╗"
+    echo "  ║   ⚡ Remnawave + Bedolaga Auto Installer by Santey990   ║"
+    echo "  ╚═══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
 
@@ -52,6 +53,79 @@ install_docker() {
     else
         echo -e "${GREEN}✅ Docker уже установлен.${NC}"
     fi
+}
+
+# Проверка наличия Caddy
+check_caddy_installed() {
+    if [ -d "/opt/remnawave/caddy" ] && [ -f "/opt/remnawave/caddy/docker-compose.yml" ]; then
+        # Проверяем, запущен ли контейнер caddy
+        if docker ps --format '{{.Names}}' | grep -q "^caddy$"; then
+            return 0
+        else
+            return 1
+        fi
+    else
+        return 1
+    fi
+}
+
+# Гарантируем запуск Caddy (если не установлен - предлагаем установить)
+ensure_caddy_running() {
+    if ! check_caddy_installed; then
+        echo -e "${YELLOW}⚠️  Caddy не установлен или не запущен.${NC}"
+        echo -e "Для работы Bedolaga необходим Caddy."
+        echo -e "Вы можете установить его через установку панели Remnawave (пункт 1 → 1)."
+        echo -e "Или запустить Caddy отдельно, но это сложнее."
+        read -p "Хотите установить Caddy автоматически? (y/n): " install_caddy
+        if [[ "$install_caddy" =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}🚀 Устанавливаем Caddy...${NC}"
+            mkdir -p /opt/remnawave/caddy
+            cd /opt/remnawave/caddy
+            
+            # Создаём docker-compose для Caddy
+            cat > docker-compose.yml <<EOF
+services:
+    caddy:
+        image: caddy:2.9
+        container_name: caddy
+        hostname: caddy
+        restart: always
+        ports:
+            - '0.0.0.0:443:443'
+            - '0.0.0.0:80:80'
+        networks:
+            - remnawave-network
+        volumes:
+            - ./Caddyfile:/etc/caddy/Caddyfile
+            - caddy-ssl-data:/data
+networks:
+    remnawave-network:
+        name: remnawave-network
+        driver: bridge
+        external: true
+volumes:
+    caddy-ssl-data:
+        driver: local
+        external: false
+        name: caddy-ssl-data
+EOF
+
+            # Инициализируем блоки
+            init_caddy_blocks
+            
+            # Создаём Caddyfile
+            rebuild_caddyfile
+            
+            # Запускаем Caddy
+            docker compose up -d
+            echo -e "${GREEN}✅ Caddy установлен и запущен.${NC}"
+        else
+            echo -e "${RED}❌ Без Caddy бот и кабинет не будут работать. Выход.${NC}"
+            read -p "Нажмите Enter для возврата..."
+            return 1
+        fi
+    fi
+    return 0
 }
 
 # ============================================
@@ -246,12 +320,12 @@ EOF
         echo -e "${GREEN}✅ Caddy обновлён.${NC}"
     fi
 
-    echo -e "\n${GREEN}${BOLD}╔════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}${BOLD}║        ✅ УСТАНОВКА ПАНЕЛИ ЗАВЕРШЕНА! 🎉          ║${NC}"
-    echo -e "${GREEN}${BOLD}╚════════════════════════════════════════════════════╝${NC}"
+    echo -e "\n${GREEN}${BOLD}╔═══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}${BOLD}║        ✅ УСТАНОВКА ПАНЕЛИ ЗАВЕРШЕНА! 🎉                     ║${NC}"
+    echo -e "${GREEN}${BOLD}╚═══════════════════════════════════════════════════════════════╝${NC}"
     echo -e "${CYAN}🌐 Админка:  ${BOLD}https://$PANEL_DOMAIN${NC}"
     echo -e "${CYAN}📄 Подписка: ${BOLD}https://$SUB_DOMAIN${NC}"
-    echo -e "${GREEN}${BOLD}════════════════════════════════════════════════════════${NC}\n"
+    echo -e "${GREEN}${BOLD}═════════════════════════════════════════════════════════════════${NC}\n"
     read -p "Нажмите Enter для возврата в меню..."
 }
 
@@ -298,12 +372,12 @@ EOF
     docker compose up -d
     echo -e "${GREEN}✅ Нода запущена!${NC}"
 
-    echo -e "\n${GREEN}${BOLD}╔════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}${BOLD}║         ✅ НОДА УСТАНОВЛЕНА! 🎉                   ║${NC}"
-    echo -e "${GREEN}${BOLD}╚════════════════════════════════════════════════════╝${NC}"
+    echo -e "\n${GREEN}${BOLD}╔═══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}${BOLD}║         ✅ НОДА УСТАНОВЛЕНА! 🎉                          ║${NC}"
+    echo -e "${GREEN}${BOLD}╚═══════════════════════════════════════════════════════════════╝${NC}"
     echo -e "${YELLOW}⚠️  ВАЖНО: Закройте порт ${BOLD}$NODE_PORT${NC}${YELLOW} в фаерволе ноды"
     echo -e "   для всех, КРОМЕ IP-адреса основной панели!${NC}"
-    echo -e "${GREEN}${BOLD}════════════════════════════════════════════════════════${NC}\n"
+    echo -e "${GREEN}${BOLD}═════════════════════════════════════════════════════════════════${NC}\n"
     read -p "Нажмите Enter для возврата в меню..."
 }
 
@@ -609,13 +683,13 @@ update_bedolaga() {
 }
 
 # ============================================
-# НОВАЯ ФУНКЦИЯ: НАСТРОЙКА CADDY ДЛЯ BEDOLAGA
+# ОБНОВЛЕННАЯ ФУНКЦИЯ: НАСТРОЙКА CADDY ДЛЯ BEDOLAGA
 # ============================================
 setup_caddy_for_bedolaga() {
     show_logo
     echo -e "${BLUE}${BOLD}🌐 Настройка Caddy для Bedolaga Bot + Cabinet${NC}\n"
 
-    # Проверка наличия бота и кабинета
+    # Проверка наличия бота
     if [ ! -d "/opt/bedolaga-bot" ]; then
         echo -e "${RED}❌ Bedolaga Bot не установлен (нет /opt/bedolaga-bot).${NC}"
         echo -e "Сначала установите бота через пункт меню 2 → 1."
@@ -623,35 +697,46 @@ setup_caddy_for_bedolaga() {
         return
     fi
 
-    if [ ! -d "/opt/bedolaga-cabinet" ]; then
-        echo -e "${YELLOW}⚠️  Cabinet не установлен (нет /opt/bedolaga-cabinet).${NC}"
-        echo -e "Кабинет будет установлен позже, но Caddy можно настроить уже сейчас."
+    # Проверка наличия Caddy
+    if ! ensure_caddy_running; then
+        return
     fi
 
-    # Пытаемся определить существующие домены из блоков Caddy
+    # Определяем домены
     blocks_dir="/opt/remnawave/caddy/blocks"
-    if [ ! -d "$blocks_dir" ]; then
-        mkdir -p "$blocks_dir"
-    fi
-    
     BOT_DOMAIN=""
     CABINET_DOMAIN=""
-    
-    for block_file in "$blocks_dir"/*; do
-        if [ -f "$block_file" ]; then
-            block_content=$(cat "$block_file")
-            if echo "$block_content" | grep -q "reverse_proxy remnawave_bot:8080"; then
-                BOT_DOMAIN=$(basename "$block_file")
-            fi
-            if echo "$block_content" | grep -q "reverse_proxy cabinet_frontend:80" || echo "$block_content" | grep -q "file_server /srv/cabinet"; then
-                CABINET_DOMAIN=$(basename "$block_file")
-            fi
-        fi
-    done
 
-    # Если не нашли, пробуем вытянуть из .env бота
+    # Сканируем существующие блоки
+    if [ -d "$blocks_dir" ]; then
+        for block_file in "$blocks_dir"/*; do
+            if [ -f "$block_file" ]; then
+                block_content=$(cat "$block_file")
+                # Ищем блок для бота (прокси на remnawave_bot:8080)
+                if echo "$block_content" | grep -q "reverse_proxy remnawave_bot:8080"; then
+                    # Если уже есть блок для бота, не перезаписываем, если только это не блок кабинета
+                    # Но блок кабинета тоже может иметь reverse_proxy remnawave_bot:8080 для /api
+                    # Поэтому проверяем, есть ли handle /api/* в блоке - если есть, это кабинет
+                    if ! echo "$block_content" | grep -q "handle /api/\*"; then
+                        BOT_DOMAIN=$(basename "$block_file")
+                    fi
+                fi
+                # Ищем блок для кабинета (прокси на cabinet_frontend:80 или file_server)
+                if echo "$block_content" | grep -q "reverse_proxy cabinet_frontend:80" || echo "$block_content" | grep -q "file_server /srv/cabinet"; then
+                    CABINET_DOMAIN=$(basename "$block_file")
+                fi
+            fi
+        done
+    fi
+
+    # Если не нашли домен бота, пробуем вытянуть из .env бота
     if [ -z "$BOT_DOMAIN" ] && [ -f "/opt/bedolaga-bot/.env" ]; then
         BOT_DOMAIN=$(grep -E "^WEBHOOK_URL=" /opt/bedolaga-bot/.env | sed -E 's|^WEBHOOK_URL=https?://([^:/]+).*$|\1|')
+    fi
+
+    # Если не нашли домен кабинета, пробуем из .env кабинета
+    if [ -z "$CABINET_DOMAIN" ] && [ -f "/opt/bedolaga-cabinet/.env" ]; then
+        CABINET_DOMAIN=$(grep -E "^VITE_API_URL=" /opt/bedolaga-cabinet/.env | sed -E 's|^.*//([^:/]+).*$|\1|')
     fi
 
     # Если всё ещё пусто – запрашиваем вручную
@@ -665,30 +750,41 @@ setup_caddy_for_bedolaga() {
         fi
     fi
 
-    if [ -z "$CABINET_DOMAIN" ] && [ -d "/opt/bedolaga-cabinet" ]; then
-        # Попробуем прочитать из .env кабинета (если есть)
-        if [ -f "/opt/bedolaga-cabinet/.env" ]; then
-            CABINET_DOMAIN=$(grep -E "^VITE_API_URL=" /opt/bedolaga-cabinet/.env | sed -E 's|^.*//([^:/]+).*$|\1|')
-        fi
-        # Если не нашли, запросим
-        if [ -z "$CABINET_DOMAIN" ]; then
+    if [ -z "$CABINET_DOMAIN" ]; then
+        if [ -d "/opt/bedolaga-cabinet" ]; then
             echo -e "${YELLOW}Не удалось автоматически определить домен для Cabinet.${NC}"
             read -p "🌐 Введите домен для Cabinet (например cabinet.myvpn.com): " CABINET_DOMAIN
             if [ -z "$CABINET_DOMAIN" ]; then
                 echo -e "${RED}❌ Домен не введён. Пропускаем настройку кабинета.${NC}"
                 CABINET_DOMAIN=""
             fi
-        fi
-    else
-        if [ -z "$CABINET_DOMAIN" ]; then
+        else
             echo -e "${YELLOW}Cabinet не установлен, пропускаем его настройку.${NC}"
         fi
     fi
 
-    # Теперь создаём блоки Caddy
+    # Выводим пользователю найденные/введённые домены и просим подтверждения
+    echo -e "\n${CYAN}${BOLD}Найденные домены:${NC}"
+    echo -e "  🤖 Бот:      ${BOLD}$BOT_DOMAIN${NC}"
+    if [ -n "$CABINET_DOMAIN" ]; then
+        echo -e "  🗄️  Cabinet:  ${BOLD}$CABINET_DOMAIN${NC}"
+    else
+        echo -e "  🗄️  Cabinet:  ${YELLOW}не установлен${NC}"
+    fi
+    echo ""
+    read -p "Всё верно? (y — продолжить, n — изменить домены): " confirm
+
+    if [[ "$confirm" =~ ^[Nn]$ ]]; then
+        read -p "🌐 Введите новый домен для БОТА: " BOT_DOMAIN
+        if [ -n "$CABINET_DOMAIN" ]; then
+            read -p "🌐 Введите новый домен для CABINET: " CABINET_DOMAIN
+        fi
+    fi
+
+    # Создаём блоки Caddy
     echo -e "\n${YELLOW}🔧 Добавляем/обновляем блоки Caddy...${NC}"
 
-    # Блок для бота (прокси на контейнер remnawave_bot:8080)
+    # Блок для бота (прокси на remnawave_bot:8080)
     BOT_BLOCK="https://$BOT_DOMAIN {
     encode gzip zstd
     handle {
@@ -703,11 +799,25 @@ setup_caddy_for_bedolaga() {
 }"
     add_caddy_block "$BOT_DOMAIN" "$BOT_BLOCK"
 
-    # Блок для кабинета (если задан)
+    # Блок для кабинета, если задан
     if [ -n "$CABINET_DOMAIN" ]; then
-        # Проверяем, как раздаётся кабинет: статика или контейнер?
-        # В скрипте установки кабинет запускается как контейнер cabinet_frontend:80
-        CABINET_BLOCK="https://$CABINET_DOMAIN {
+        # Определяем, как раздаётся кабинет: через контейнер cabinet_frontend или статика
+        # Если есть папка /srv/cabinet с файлами, используем file_server
+        # Иначе используем reverse_proxy на cabinet_frontend:80
+        if [ -d "/srv/cabinet" ] && [ -f "/srv/cabinet/index.html" ]; then
+            CABINET_BLOCK="https://$CABINET_DOMAIN {
+    encode gzip zstd
+    handle /api/* {
+        uri strip_prefix /api
+        reverse_proxy remnawave_bot:8080
+    }
+    handle {
+        root * /srv/cabinet
+        file_server
+    }
+}"
+        else
+            CABINET_BLOCK="https://$CABINET_DOMAIN {
     encode gzip zstd
     handle /api/* {
         uri strip_prefix /api
@@ -717,20 +827,28 @@ setup_caddy_for_bedolaga() {
         reverse_proxy cabinet_frontend:80
     }
 }"
+        fi
         add_caddy_block "$CABINET_DOMAIN" "$CABINET_BLOCK"
     fi
 
     # Перезапускаем Caddy
     echo -e "${YELLOW}🔄 Перезапускаем Caddy...${NC}"
     cd /opt/remnawave/caddy
-    docker compose down && docker compose up -d
-    echo -e "${GREEN}✅ Caddy перезапущен.${NC}"
+    if [ -f "docker-compose.yml" ]; then
+        docker compose down 2>/dev/null
+        docker compose up -d
+        echo -e "${GREEN}✅ Caddy перезапущен.${NC}"
+    else
+        echo -e "${RED}❌ Файл docker-compose.yml для Caddy не найден.${NC}"
+        echo -e "Пожалуйста, установите Caddy через установку панели."
+        read -p "Нажмите Enter..."
+        return
+    fi
 
     # Дополнительно: проверяем .env бота на наличие переменных для Cabinet
     if [ -n "$CABINET_DOMAIN" ] && [ -f "/opt/bedolaga-bot/.env" ]; then
         if ! grep -q "CABINET_ENABLED=true" /opt/bedolaga-bot/.env; then
             echo -e "${YELLOW}⚠️  В .env бота отсутствуют настройки Cabinet. Добавляем...${NC}"
-            # Генерируем JWT секрет
             CABINET_JWT_SECRET=$(openssl rand -hex 32)
             cat >> /opt/bedolaga-bot/.env <<EOF
 
@@ -991,7 +1109,7 @@ while true; do
     echo -e "  ${CYAN}4)${NC} 🌐 Cloudflare WARP"
     echo -e "  ${CYAN}5)${NC} 💾 Бэкапы"
     echo -e "  ${CYAN}6)${NC} 📋 Логи"
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "  ${CYAN}0)${NC} 🚪 Выход"
     read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор: )" main_choice
 
