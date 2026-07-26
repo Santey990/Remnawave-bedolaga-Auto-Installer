@@ -68,7 +68,6 @@ check_caddy_installed() {
     fi
 }
 
-# Гарантируем запуск Caddy
 ensure_caddy_running() {
     if ! check_caddy_installed; then
         echo -e "${YELLOW}⚠️  Caddy не установлен или не запущен.${NC}"
@@ -80,7 +79,7 @@ ensure_caddy_running() {
             echo -e "${YELLOW}🚀 Устанавливаем Caddy...${NC}"
             mkdir -p /opt/remnawave/caddy
             cd /opt/remnawave/caddy
-            
+
             cat > docker-compose.yml <<EOF
 services:
     caddy:
@@ -133,7 +132,7 @@ add_caddy_block() {
     local domain="$1"
     local block_content="$2"
     local blocks_dir="/opt/remnawave/caddy/blocks"
-    
+
     init_caddy_blocks
     echo "$block_content" > "$blocks_dir/$domain"
     echo -e "${GREEN}✅ Блок для $domain сохранён.${NC}"
@@ -143,7 +142,7 @@ add_caddy_block() {
 remove_caddy_block() {
     local domain="$1"
     local blocks_dir="/opt/remnawave/caddy/blocks"
-    
+
     if [ -f "$blocks_dir/$domain" ]; then
         rm -f "$blocks_dir/$domain"
         echo -e "${GREEN}✅ Блок для $domain удалён.${NC}"
@@ -156,11 +155,11 @@ remove_caddy_block() {
 rebuild_caddyfile() {
     local blocks_dir="/opt/remnawave/caddy/blocks"
     local caddyfile="/opt/remnawave/caddy/Caddyfile"
-    
+
     echo "# Remnawave Caddy Configuration" > "$caddyfile"
     echo "# Auto-generated - do not edit manually" >> "$caddyfile"
     echo "" >> "$caddyfile"
-    
+
     if [ -d "$blocks_dir" ]; then
         for block_file in "$blocks_dir"/*; do
             if [ -f "$block_file" ]; then
@@ -169,14 +168,14 @@ rebuild_caddyfile() {
             fi
         done
     fi
-    
+
     cat >> "$caddyfile" << 'EOF'
 :443 {
     tls internal
     respond 204
 }
 EOF
-    
+
     echo -e "${GREEN}✅ Caddyfile пересобран.${NC}"
 }
 
@@ -235,7 +234,7 @@ install_panel() {
 services:
     caddy:
         image: caddy:2.9
-        container_name: caddy
+        container_name: 'caddy'
         hostname: caddy
         restart: always
         ports:
@@ -302,12 +301,12 @@ EOF
         echo -e "${GREEN}✅ Страница подписки запущена.${NC}"
 
         echo -e "${YELLOW}🔄 Шаг 7. Добавляем домен подписки в Caddy...${NC}"
-        
+
         SUB_BLOCK="https://$SUB_DOMAIN {
     reverse_proxy * http://remnawave-subscription-page:3010
 }"
         add_caddy_block "$SUB_DOMAIN" "$SUB_BLOCK"
-        
+
         cd /opt/remnawave/caddy
         docker compose down && docker compose up -d
         echo -e "${GREEN}✅ Caddy обновлён.${NC}"
@@ -380,7 +379,7 @@ EOF
 update_components() {
     show_logo
     echo -e "${BLUE}${BOLD}🔄 Обновление компонентов Remnawave${NC}\n"
-    
+
     echo -e "${BOLD}Что хотите обновить?${NC}"
     echo -e "  ${CYAN}1)${NC} 🚀 Обновить Панель + Страницу подписки"
     echo -e "  ${CYAN}2)${NC} 🖥️  Обновить Ноду"
@@ -504,7 +503,7 @@ install_bedolaga() {
 
     mkdir -p /opt/bedolaga-bot && cd /opt/bedolaga-bot
     git clone https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot.git .
-    
+
     cat > .env <<EOF
 BOT_TOKEN=$BOT_TOKEN
 ADMIN_IDS=$ADMIN_IDS
@@ -560,7 +559,7 @@ EOF
     }
 }"
         add_caddy_block "$BEDOLAGA_DOMAIN" "$BEDOLAGA_BLOCK"
-        
+
         cd /opt/remnawave/caddy
         docker compose down && docker compose up -d
     fi
@@ -586,6 +585,7 @@ install_cabinet() {
 
     CABINET_JWT_SECRET=$(openssl rand -hex 32)
 
+    # Добавляем настройки в .env бота
     cd /opt/bedolaga-bot
     if ! grep -q "CABINET_ENABLED=true" .env; then
         cat >> .env <<EOF
@@ -621,6 +621,7 @@ EOF
     mkdir -p /srv/cabinet
     cp -r ./cabinet-dist/* /srv/cabinet/
 
+    # Caddy блок
     CABINET_BLOCK="https://$CABINET_DOMAIN {
     encode gzip zstd
     handle /api/* {
@@ -632,13 +633,17 @@ EOF
     }
 }"
     add_caddy_block "$CABINET_DOMAIN" "$CABINET_BLOCK"
-    
+
     cd /opt/remnawave/caddy
     docker compose down && docker compose up -d
 
+    # Запуск контейнера Cabinet
     cd /opt/bedolaga-cabinet
     docker compose up -d
 
+    # Подключение сетей (чтобы Caddy видел контейнеры)
+    echo -e "${YELLOW}🔗 Подключаем Caddy к сетям бота и кабинета...${NC}"
+    docker network connect bedolaga-bot_bot_network caddy 2>/dev/null || true
     docker network connect bedolaga-cabinet_default caddy 2>/dev/null || true
 
     echo -e "${GREEN}✅ MiniAPP (Cabinet) успешно установлен!${NC}"
@@ -671,7 +676,7 @@ update_bedolaga() {
 }
 
 # ============================================
-# ОБНОВЛЕННАЯ ФУНКЦИЯ: НАСТРОЙКА CADDY ДЛЯ BEDOLAGA
+# НАСТРОЙКА CADDY ДЛЯ BEDOLAGA
 # ============================================
 setup_caddy_for_bedolaga() {
     show_logo
@@ -696,8 +701,10 @@ setup_caddy_for_bedolaga() {
         for block_file in "$blocks_dir"/*; do
             if [ -f "$block_file" ]; then
                 block_content=$(cat "$block_file")
-                if echo "$block_content" | grep -q "reverse_proxy remnawave_bot:8080" && ! echo "$block_content" | grep -q "handle /api/\*"; then
-                    BOT_DOMAIN=$(basename "$block_file")
+                if echo "$block_content" | grep -q "reverse_proxy remnawave_bot:8080"; then
+                    if ! echo "$block_content" | grep -q "handle /api/\*"; then
+                        BOT_DOMAIN=$(basename "$block_file")
+                    fi
                 fi
                 if echo "$block_content" | grep -q "reverse_proxy cabinet_frontend:80" || echo "$block_content" | grep -q "file_server /srv/cabinet"; then
                     CABINET_DOMAIN=$(basename "$block_file")
@@ -798,26 +805,6 @@ setup_caddy_for_bedolaga() {
         add_caddy_block "$CABINET_DOMAIN" "$CABINET_BLOCK"
     fi
 
-    # === АВТОМАТИЧЕСКОЕ ПОДКЛЮЧЕНИЕ Caddy К СЕТЯМ БОТА И КАБИНЕТА ===
-    echo -e "${YELLOW}🔗 Подключаем Caddy к сетям бота и кабинета...${NC}"
-    
-    BOT_NET=$(docker inspect remnawave_bot --format='{{range $key, $value := .NetworkSettings.Networks}}{{$key}}{{end}}' 2>/dev/null)
-    CABINET_NET=$(docker inspect cabinet_frontend --format='{{range $key, $value := .NetworkSettings.Networks}}{{$key}}{{end}}' 2>/dev/null)
-    
-    if [ -n "$BOT_NET" ]; then
-        docker network connect "$BOT_NET" caddy 2>/dev/null || true
-        echo -e "${GREEN}✅ Caddy подключён к сети бота: $BOT_NET${NC}"
-    else
-        echo -e "${YELLOW}⚠️ Не удалось определить сеть бота.${NC}"
-    fi
-    
-    if [ -n "$CABINET_NET" ]; then
-        docker network connect "$CABINET_NET" caddy 2>/dev/null || true
-        echo -e "${GREEN}✅ Caddy подключён к сети кабинета: $CABINET_NET${NC}"
-    else
-        echo -e "${YELLOW}⚠️ Не удалось определить сеть кабинета.${NC}"
-    fi
-
     echo -e "${YELLOW}🔄 Перезапускаем Caddy...${NC}"
     cd /opt/remnawave/caddy
     if [ -f "docker-compose.yml" ]; then
@@ -830,6 +817,12 @@ setup_caddy_for_bedolaga() {
         read -p "Нажмите Enter..."
         return
     fi
+
+    # Подключаем Caddy к сетям бота и кабинета (на всякий случай)
+    echo -e "${YELLOW}🔗 Подключаем Caddy к сетям...${NC}"
+    docker network connect remnawave_bot_network caddy 2>/dev/null || true
+    docker network connect bedolaga-bot_bot_network caddy 2>/dev/null || true
+    docker network connect bedolaga-cabinet_default caddy 2>/dev/null || true
 
     if [ -n "$CABINET_DOMAIN" ] && [ -f "/opt/bedolaga-bot/.env" ]; then
         if ! grep -q "CABINET_ENABLED=true" /opt/bedolaga-bot/.env; then
@@ -853,6 +846,158 @@ EOF
     echo -e "🌐 Бот: https://$BOT_DOMAIN"
     [ -n "$CABINET_DOMAIN" ] && echo -e "🗄️  Cabinet: https://$CABINET_DOMAIN"
     echo -e "\n"
+    read -p "Нажмите Enter для возврата..."
+}
+
+# ============================================
+# НОВАЯ ФУНКЦИЯ: CLOUDFLARE DDNS
+# ============================================
+install_cloudflare_ddns() {
+    show_logo
+    echo -e "${BLUE}${BOLD}🌐 Настройка Cloudflare DDNS${NC}\n"
+    echo -e "Этот скрипт настроит автоматическое обновление A/AAAA записи"
+    echo -e "при изменении внешнего IP вашего сервера.\n"
+
+    # Проверяем наличие jq и curl
+    if ! command -v jq &> /dev/null; then
+        echo -e "${YELLOW}📦 Устанавливаем jq...${NC}"
+        apt-get update -qq && apt-get install -y -qq jq curl >/dev/null 2>&1
+    fi
+
+    read -p "🔑 Введите ваш Cloudflare API Token (с правами Zone:Read и DNS:Edit): " CF_API_TOKEN
+    if [ -z "$CF_API_TOKEN" ]; then
+        echo -e "${RED}❌ API Token обязателен!${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    read -p "🌐 Введите домен зоны (например, example.com): " ZONE_NAME
+    if [ -z "$ZONE_NAME" ]; then
+        echo -e "${RED}❌ Домен зоны обязателен!${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    read -p "📝 Введите имя записи (например, panel, bot или @ для основного): " RECORD_NAME
+    if [ -z "$RECORD_NAME" ]; then
+        echo -e "${RED}❌ Имя записи обязательно!${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    read -p "🔄 Тип записи (A — IPv4, AAAA — IPv6) [A]: " RECORD_TYPE
+    RECORD_TYPE=${RECORD_TYPE:-A}
+    if [[ "$RECORD_TYPE" != "A" && "$RECORD_TYPE" != "AAAA" ]]; then
+        echo -e "${RED}❌ Неверный тип. Используем A.${NC}"
+        RECORD_TYPE="A"
+    fi
+
+    echo -e "\n${YELLOW}⏳ Проверяем API токен и получаем zone_id...${NC}"
+    ZONE_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ZONE_NAME" \
+        -H "Authorization: Bearer $CF_API_TOKEN" \
+        -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+    if [ -z "$ZONE_ID" ] || [ "$ZONE_ID" == "null" ]; then
+        echo -e "${RED}❌ Не удалось получить zone_id. Проверьте API токен и домен.${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+    echo -e "${GREEN}✅ Zone ID получен: $ZONE_ID${NC}"
+
+    # Создаём папку для скрипта
+    mkdir -p /opt/cloudflare-ddns
+    cat > /opt/cloudflare-ddns/update.sh <<'EOF'
+#!/bin/bash
+
+# Конфигурация (заполняется автоматически при установке)
+CF_API_TOKEN="__TOKEN__"
+ZONE_ID="__ZONE_ID__"
+RECORD_NAME="__RECORD_NAME__"
+RECORD_TYPE="__RECORD_TYPE__"
+
+# Получаем текущий внешний IP
+if [ "$RECORD_TYPE" == "A" ]; then
+    CURRENT_IP=$(curl -s -4 https://api.ipify.org)
+else
+    CURRENT_IP=$(curl -s -6 https://api6.ipify.org)
+fi
+
+if [ -z "$CURRENT_IP" ]; then
+    echo "❌ Не удалось получить IP"
+    exit 1
+fi
+
+# Получаем ID записи
+RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=$RECORD_TYPE&name=$RECORD_NAME" \
+    -H "Authorization: Bearer $CF_API_TOKEN" \
+    -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+if [ -z "$RECORD_ID" ] || [ "$RECORD_ID" == "null" ]; then
+    echo "❌ Запись $RECORD_NAME не найдена. Создаём..."
+    curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
+        -H "Authorization: Bearer $CF_API_TOKEN" \
+        -H "Content-Type: application/json" \
+        --data "{\"type\":\"$RECORD_TYPE\",\"name\":\"$RECORD_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}" > /dev/null
+    echo "✅ Запись создана."
+else
+    # Обновляем запись
+    curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID" \
+        -H "Authorization: Bearer $CF_API_TOKEN" \
+        -H "Content-Type: application/json" \
+        --data "{\"type\":\"$RECORD_TYPE\",\"name\":\"$RECORD_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}" > /dev/null
+    echo "✅ Запись обновлена: $RECORD_NAME -> $CURRENT_IP"
+fi
+EOF
+
+    # Подставляем переменные
+    sed -i "s|__TOKEN__|$CF_API_TOKEN|g" /opt/cloudflare-ddns/update.sh
+    sed -i "s|__ZONE_ID__|$ZONE_ID|g" /opt/cloudflare-ddns/update.sh
+    sed -i "s|__RECORD_NAME__|$RECORD_NAME|g" /opt/cloudflare-ddns/update.sh
+    sed -i "s|__RECORD_TYPE__|$RECORD_TYPE|g" /opt/cloudflare-ddns/update.sh
+
+    chmod +x /opt/cloudflare-ddns/update.sh
+
+    # Создаём systemd-сервис
+    cat > /etc/systemd/system/cloudflare-ddns.service <<EOF
+[Unit]
+Description=Cloudflare DDNS Updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/cloudflare-ddns/update.sh
+User=root
+EOF
+
+    # Создаём systemd-таймер (каждые 5 минут)
+    cat > /etc/systemd/system/cloudflare-ddns.timer <<EOF
+[Unit]
+Description=Cloudflare DDNS timer (every 5 minutes)
+Requires=cloudflare-ddns.service
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable cloudflare-ddns.timer
+    systemctl start cloudflare-ddns.timer
+
+    # Первый запуск
+    echo -e "${YELLOW}🔄 Выполняем первое обновление...${NC}"
+    /opt/cloudflare-ddns/update.sh
+
+    echo -e "\n${GREEN}${BOLD}✅ Cloudflare DDNS настроен!${NC}"
+    echo -e "📌 Запись: $RECORD_NAME.$ZONE_NAME ($RECORD_TYPE)"
+    echo -e "⏱️  Обновление каждые 5 минут (таймер active)"
+    echo -e "📋 Лог: journalctl -u cloudflare-ddns -f"
+    echo -e "🔄 Принудительный запуск: systemctl start cloudflare-ddns"
+    echo -e ""
     read -p "Нажмите Enter для возврата..."
 }
 
@@ -928,7 +1073,7 @@ EOF
     }
 }"
         add_caddy_block "$ADMIN_DOMAIN" "$ADMIN_BLOCK"
-        
+
         cd /opt/remnawave/caddy
         docker compose down && docker compose up -d
     fi
@@ -949,7 +1094,7 @@ install_warp() {
 
     echo -e "${YELLOW}📥 Запускаем официальный скрипт установки warp-native...${NC}"
     bash <(curl -fsSL https://raw.githubusercontent.com/distillium/warp-native/main/install.sh)
-    
+
     echo -e "${GREEN}✅ WARP успешно установлен!${NC}\n"
     read -p "Нажмите Enter для возврата в меню..."
 }
@@ -960,7 +1105,7 @@ uninstall_warp() {
 
     echo -e "${YELLOW}📥 Запускаем официальный скрипт удаления...${NC}"
     bash <(curl -fsSL https://raw.githubusercontent.com/distillium/warp-native/main/uninstall.sh) || true
-    
+
     echo -e "${GREEN}✅ WARP успешно удалён.${NC}\n"
     read -p "Нажмите Enter для возврата в меню..."
 }
@@ -981,7 +1126,7 @@ run_backup() {
 
     echo -e "${YELLOW}Запускаем скрипт бэкапов...${NC}\n"
     bash /tmp/backup-restore.sh
-    
+
     echo -e "\n${GREEN}✅ Скрипт бэкапов завершён.${NC}\n"
     read -p "Нажмите Enter для возврата в меню..."
 }
@@ -1012,13 +1157,13 @@ show_logs_menu() {
 show_panel_logs() {
     show_logo
     echo -e "${BLUE}${BOLD}🚀 Логи панели Remnawave${NC}\n"
-    
+
     if [ ! -d "/opt/remnawave" ]; then
         echo -e "${RED}❌ Папка /opt/remnawave не найдена.${NC}"
         read -p "Нажмите Enter..."
         return
     fi
-    
+
     cd /opt/remnawave
     echo -e "${YELLOW}Нажмите Ctrl+C для выхода из логов${NC}\n"
     docker compose logs -f --tail=100
@@ -1027,13 +1172,13 @@ show_panel_logs() {
 show_subscription_logs() {
     show_logo
     echo -e "${BLUE}${BOLD}📄 Логи страницы подписки${NC}\n"
-    
+
     if [ ! -d "/opt/remnawave/subscription" ]; then
         echo -e "${RED}❌ Папка /opt/remnawave/subscription не найдена.${NC}"
         read -p "Нажмите Enter..."
         return
     fi
-    
+
     cd /opt/remnawave/subscription
     echo -e "${YELLOW}Нажмите Ctrl+C для выхода из логов${NC}\n"
     docker compose logs -f --tail=100
@@ -1086,7 +1231,7 @@ show_warp_menu() {
 while true; do
     show_logo
     create_alias
-    
+
     echo -e "${BOLD}Выберите раздел:${NC}"
     echo -e "  ${CYAN}1)${NC} 🚀 Remnawave"
     echo -e "  ${CYAN}2)${NC} 💰 Bedolaga (Bot + MiniAPP)"
@@ -1094,6 +1239,7 @@ while true; do
     echo -e "  ${CYAN}4)${NC} 🌐 Cloudflare WARP"
     echo -e "  ${CYAN}5)${NC} 💾 Бэкапы"
     echo -e "  ${CYAN}6)${NC} 📋 Логи"
+    echo -e "  ${CYAN}7)${NC} 🌐 Cloudflare DDNS (обновление IP)"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "  ${CYAN}0)${NC} 🚪 Выход"
     read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор: )" main_choice
@@ -1105,6 +1251,7 @@ while true; do
         4) show_warp_menu ;;
         5) run_backup ;;
         6) show_logs_menu ;;
+        7) install_cloudflare_ddns ;;
         0) echo -e "${GREEN}👋 До свидания!${NC}"; exit 0 ;;
         *) echo -e "${RED}❌ Неверный выбор.${NC}"; sleep 2 ;;
     esac
