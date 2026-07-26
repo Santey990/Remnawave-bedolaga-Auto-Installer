@@ -850,12 +850,12 @@ EOF
 }
 
 # ============================================
-# НОВАЯ ФУНКЦИЯ: CLOUDFLARE DDNS
+# ОБНОВЛЁННАЯ ФУНКЦИЯ: CLOUDFLARE DDNS (МНОГО ЗАПИСЕЙ)
 # ============================================
 install_cloudflare_ddns() {
     show_logo
-    echo -e "${BLUE}${BOLD}🌐 Настройка Cloudflare DDNS${NC}\n"
-    echo -e "Этот скрипт настроит автоматическое обновление A/AAAA записи"
+    echo -e "${BLUE}${BOLD}🌐 Настройка Cloudflare DDNS (несколько записей)${NC}\n"
+    echo -e "Этот скрипт настроит автоматическое обновление A/AAAA записей"
     echo -e "при изменении внешнего IP вашего сервера.\n"
 
     if ! command -v jq &> /dev/null; then
@@ -877,14 +877,24 @@ install_cloudflare_ddns() {
         return
     fi
 
-    read -p "📝 Введите имя записи (например, panel, bot или @ для основного): " RECORD_NAME
-    if [ -z "$RECORD_NAME" ]; then
-        echo -e "${RED}❌ Имя записи обязательно!${NC}"
+    # Запрашиваем список записей через запятую
+    read -p "📝 Введите имена записей через запятую (например, panel,bot,@): " RECORD_NAMES_INPUT
+    if [ -z "$RECORD_NAMES_INPUT" ]; then
+        echo -e "${RED}❌ Имена записей обязательны!${NC}"
         read -p "Нажмите Enter для возврата..."
         return
     fi
 
-    read -p "🔄 Тип записи (A — IPv4, AAAA — IPv6) [A]: " RECORD_TYPE
+    # Очищаем от пробелов, разбиваем в массив
+    RECORD_NAMES=$(echo "$RECORD_NAMES_INPUT" | tr -d ' ' | tr ',' '\n')
+    # Проверяем, что не пусто
+    if [ -z "$RECORD_NAMES" ]; then
+        echo -e "${RED}❌ Не введено ни одного имени.${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    read -p "🔄 Тип записей (A — IPv4, AAAA — IPv6) [A]: " RECORD_TYPE
     RECORD_TYPE=${RECORD_TYPE:-A}
     if [[ "$RECORD_TYPE" != "A" && "$RECORD_TYPE" != "AAAA" ]]; then
         echo -e "${RED}❌ Неверный тип. Используем A.${NC}"
@@ -904,14 +914,17 @@ install_cloudflare_ddns() {
     echo -e "${GREEN}✅ Zone ID получен: $ZONE_ID${NC}"
 
     mkdir -p /opt/cloudflare-ddns
+
+    # Создаём скрипт обновления с циклом по записям
     cat > /opt/cloudflare-ddns/update.sh <<'EOF'
 #!/bin/bash
 
 CF_API_TOKEN="__TOKEN__"
 ZONE_ID="__ZONE_ID__"
-RECORD_NAME="__RECORD_NAME__"
 RECORD_TYPE="__RECORD_TYPE__"
+RECORD_NAMES_LIST="__RECORD_NAMES__"
 
+# Получаем текущий IP
 if [ "$RECORD_TYPE" == "A" ]; then
     CURRENT_IP=$(curl -s -4 https://api.ipify.org)
 else
@@ -923,36 +936,47 @@ if [ -z "$CURRENT_IP" ]; then
     exit 1
 fi
 
-RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=$RECORD_TYPE&name=$RECORD_NAME" \
-    -H "Authorization: Bearer $CF_API_TOKEN" \
-    -H "Content-Type: application/json" | jq -r '.result[0].id')
+# Разбиваем список записей
+IFS=',' read -ra NAMES <<< "$RECORD_NAMES_LIST"
 
-if [ -z "$RECORD_ID" ] || [ "$RECORD_ID" == "null" ]; then
-    echo "❌ Запись $RECORD_NAME не найдена. Создаём..."
-    curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
+for RECORD_NAME in "${NAMES[@]}"; do
+    echo "🔍 Обработка записи: $RECORD_NAME"
+    # Получаем ID записи
+    RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=$RECORD_TYPE&name=$RECORD_NAME" \
         -H "Authorization: Bearer $CF_API_TOKEN" \
-        -H "Content-Type: application/json" \
-        --data "{\"type\":\"$RECORD_TYPE\",\"name\":\"$RECORD_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}" > /dev/null
-    echo "✅ Запись создана."
-else
-    curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID" \
-        -H "Authorization: Bearer $CF_API_TOKEN" \
-        -H "Content-Type: application/json" \
-        --data "{\"type\":\"$RECORD_TYPE\",\"name\":\"$RECORD_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}" > /dev/null
-    echo "✅ Запись обновлена: $RECORD_NAME -> $CURRENT_IP"
-fi
+        -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+    if [ -z "$RECORD_ID" ] || [ "$RECORD_ID" == "null" ]; then
+        echo "❌ Запись $RECORD_NAME не найдена. Создаём..."
+        curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"type\":\"$RECORD_TYPE\",\"name\":\"$RECORD_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}" > /dev/null
+        echo "✅ Запись $RECORD_NAME создана с IP $CURRENT_IP"
+    else
+        # Обновляем запись
+        curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"type\":\"$RECORD_TYPE\",\"name\":\"$RECORD_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}" > /dev/null
+        echo "✅ Запись $RECORD_NAME обновлена: $CURRENT_IP"
+    fi
+done
 EOF
 
+    # Подставляем переменные
+    RECORD_NAMES_CSV=$(echo "$RECORD_NAMES" | tr '\n' ',' | sed 's/,$//')
     sed -i "s|__TOKEN__|$CF_API_TOKEN|g" /opt/cloudflare-ddns/update.sh
     sed -i "s|__ZONE_ID__|$ZONE_ID|g" /opt/cloudflare-ddns/update.sh
-    sed -i "s|__RECORD_NAME__|$RECORD_NAME|g" /opt/cloudflare-ddns/update.sh
     sed -i "s|__RECORD_TYPE__|$RECORD_TYPE|g" /opt/cloudflare-ddns/update.sh
+    sed -i "s|__RECORD_NAMES__|$RECORD_NAMES_CSV|g" /opt/cloudflare-ddns/update.sh
 
     chmod +x /opt/cloudflare-ddns/update.sh
 
+    # Создаём systemd-сервис
     cat > /etc/systemd/system/cloudflare-ddns.service <<EOF
 [Unit]
-Description=Cloudflare DDNS Updater
+Description=Cloudflare DDNS Updater (multi-record)
 After=network-online.target
 Wants=network-online.target
 
@@ -962,6 +986,7 @@ ExecStart=/opt/cloudflare-ddns/update.sh
 User=root
 EOF
 
+    # Таймер (каждые 5 минут)
     cat > /etc/systemd/system/cloudflare-ddns.timer <<EOF
 [Unit]
 Description=Cloudflare DDNS timer (every 5 minutes)
@@ -982,8 +1007,11 @@ EOF
     echo -e "${YELLOW}🔄 Выполняем первое обновление...${NC}"
     /opt/cloudflare-ddns/update.sh
 
-    echo -e "\n${GREEN}${BOLD}✅ Cloudflare DDNS настроен!${NC}"
-    echo -e "📌 Запись: $RECORD_NAME.$ZONE_NAME ($RECORD_TYPE)"
+    # Формируем список записей для вывода
+    RECORD_LIST_DISPLAY=$(echo "$RECORD_NAMES" | sed ':a;N;s/\n/, /g;ta' | sed 's/, $//')
+    echo -e "\n${GREEN}${BOLD}✅ Cloudflare DDNS настроен для записей:${NC}"
+    echo -e "📌 Записи: $RECORD_LIST_DISPLAY"
+    echo -e "🌐 Зона: $ZONE_NAME ($RECORD_TYPE)"
     echo -e "⏱️  Обновление каждые 5 минут (таймер active)"
     echo -e "📋 Лог: journalctl -u cloudflare-ddns -f"
     echo -e "🔄 Принудительный запуск: systemctl start cloudflare-ddns"
@@ -1175,7 +1203,7 @@ show_subscription_logs() {
 }
 
 # ============================================
-# НОВЫЙ РАЗДЕЛ: УДАЛЕНИЕ КОМПОНЕНТОВ
+# УДАЛЕНИЕ КОМПОНЕНТОВ
 # ============================================
 show_uninstall_menu() {
     while true; do
@@ -1216,7 +1244,6 @@ uninstall_panel() {
         return
     fi
 
-    # Останавливаем и удаляем контейнеры
     if [ -d "/opt/remnawave" ]; then
         cd /opt/remnawave
         docker compose down -v 2>/dev/null
@@ -1227,7 +1254,6 @@ uninstall_panel() {
         echo -e "${YELLOW}⚠️  Панель не найдена.${NC}"
     fi
 
-    # Удаляем блоки Caddy для панели и подписки (по содержимому)
     blocks_dir="/opt/remnawave/caddy/blocks"
     if [ -d "$blocks_dir" ]; then
         for block_file in "$blocks_dir"/*; do
@@ -1241,7 +1267,6 @@ uninstall_panel() {
         rebuild_caddyfile
     fi
 
-    # Перезапускаем Caddy
     if check_caddy_installed; then
         cd /opt/remnawave/caddy
         docker compose restart
@@ -1262,13 +1287,11 @@ uninstall_bedolaga_bot() {
         return
     fi
 
-    # Определяем домен бота из .env
     BOT_DOMAIN=""
     if [ -f "/opt/bedolaga-bot/.env" ]; then
         BOT_DOMAIN=$(grep -E "^WEBHOOK_URL=" /opt/bedolaga-bot/.env | sed -E 's|^WEBHOOK_URL=https?://([^:/]+).*$|\1|')
     fi
 
-    # Останавливаем и удаляем контейнеры
     if [ -d "/opt/bedolaga-bot" ]; then
         cd /opt/bedolaga-bot
         docker compose down -v 2>/dev/null
@@ -1279,12 +1302,10 @@ uninstall_bedolaga_bot() {
         echo -e "${YELLOW}⚠️  Бот не найден.${NC}"
     fi
 
-    # Удаляем блок Caddy
     if [ -n "$BOT_DOMAIN" ]; then
         remove_caddy_block "$BOT_DOMAIN"
     fi
 
-    # Перезапускаем Caddy
     if check_caddy_installed; then
         cd /opt/remnawave/caddy
         docker compose restart
@@ -1305,13 +1326,11 @@ uninstall_cabinet() {
         return
     fi
 
-    # Определяем домен кабинета из .env
     CABINET_DOMAIN=""
     if [ -f "/opt/bedolaga-cabinet/.env" ]; then
         CABINET_DOMAIN=$(grep -E "^VITE_API_URL=" /opt/bedolaga-cabinet/.env | sed -E 's|^.*//([^:/]+).*$|\1|')
     fi
 
-    # Останавливаем и удаляем контейнеры
     if [ -d "/opt/bedolaga-cabinet" ]; then
         cd /opt/bedolaga-cabinet
         docker compose down -v 2>/dev/null
@@ -1322,18 +1341,15 @@ uninstall_cabinet() {
         echo -e "${YELLOW}⚠️  Cabinet не найден.${NC}"
     fi
 
-    # Удаляем статику
     if [ -d "/srv/cabinet" ]; then
         rm -rf /srv/cabinet
         echo -e "${GREEN}✅ Статика кабинета удалена.${NC}"
     fi
 
-    # Удаляем блок Caddy
     if [ -n "$CABINET_DOMAIN" ]; then
         remove_caddy_block "$CABINET_DOMAIN"
     fi
 
-    # Перезапускаем Caddy
     if check_caddy_installed; then
         cd /opt/remnawave/caddy
         docker compose restart
@@ -1354,7 +1370,6 @@ uninstall_caddy() {
         return
     fi
 
-    # Останавливаем и удаляем контейнер Caddy
     if [ -d "/opt/remnawave/caddy" ]; then
         cd /opt/remnawave/caddy
         docker compose down -v 2>/dev/null
@@ -1365,7 +1380,6 @@ uninstall_caddy() {
         echo -e "${YELLOW}⚠️  Caddy не найден.${NC}"
     fi
 
-    # Удаляем том с SSL
     docker volume rm caddy-ssl-data 2>/dev/null
 
     echo -e "${GREEN}✅ Удаление Caddy завершено.${NC}"
@@ -1382,18 +1396,15 @@ uninstall_ddns() {
         return
     fi
 
-    # Останавливаем и отключаем таймер
     systemctl stop cloudflare-ddns.timer 2>/dev/null
     systemctl disable cloudflare-ddns.timer 2>/dev/null
     systemctl stop cloudflare-ddns.service 2>/dev/null
     systemctl disable cloudflare-ddns.service 2>/dev/null
 
-    # Удаляем файлы systemd
     rm -f /etc/systemd/system/cloudflare-ddns.timer
     rm -f /etc/systemd/system/cloudflare-ddns.service
     systemctl daemon-reload
 
-    # Удаляем скрипты
     rm -rf /opt/cloudflare-ddns
 
     echo -e "${GREEN}✅ Cloudflare DDNS удалён.${NC}"
@@ -1410,7 +1421,6 @@ uninstall_all() {
         return
     fi
 
-    # Последовательно удаляем всё
     uninstall_panel
     uninstall_bedolaga_bot
     uninstall_cabinet
@@ -1418,7 +1428,6 @@ uninstall_all() {
     uninstall_ddns
     uninstall_warp
 
-    # Дополнительная очистка
     docker system prune -af --volumes 2>/dev/null
 
     echo -e "${GREEN}${BOLD}✅ Полная очистка завершена!${NC}"
@@ -1480,7 +1489,7 @@ while true; do
     echo -e "  ${CYAN}4)${NC} 🌐 Cloudflare WARP"
     echo -e "  ${CYAN}5)${NC} 💾 Бэкапы"
     echo -e "  ${CYAN}6)${NC} 📋 Логи"
-    echo -e "  ${CYAN}7)${NC} 🌐 Cloudflare DDNS"
+    echo -e "  ${CYAN}7)${NC} 🌐 Cloudflare DDNS (много записей)"
     echo -e "  ${CYAN}8)${NC} 🗑️  Удаление компонентов"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "  ${CYAN}0)${NC} 🚪 Выход"
