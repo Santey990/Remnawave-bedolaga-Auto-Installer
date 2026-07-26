@@ -7,14 +7,14 @@
 # Repository: https://github.com/Santey990/Remnawave-bedolaga-Auto-Installer
 # ============================================
 
-# Цвета
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+# Цвета (используем $'...' для корректной интерпретации escape-последовательностей)
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+CYAN=$'\033[0;36m'
+BOLD=$'\033[1m'
+NC=$'\033[0m'
 
 # Проверка прав root
 if [ "$EUID" -ne 0 ]; then
@@ -385,7 +385,7 @@ update_components() {
     echo -e "  ${CYAN}2)${NC} 🖥️  Обновить Ноду"
     echo -e "  ${CYAN}0)${NC} 🔙 Назад"
     echo ""
-    read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор: )" update_choice
+    read -p "${CYAN}▶${NC} Ваш выбор: " update_choice
 
     case $update_choice in
         1) update_panel ;;
@@ -460,7 +460,7 @@ show_bedolaga_menu() {
         echo -e "  ${CYAN}3)${NC} Обновить компоненты"
         echo -e "  ${CYAN}4)${NC} 🌐 Настроить Caddy для Bedolaga"
         echo -e "  ${CYAN}0)${NC} Назад"
-        read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор: )" choice
+        read -p "${CYAN}▶${NC} Ваш выбор: " choice
 
         case $choice in
             1) install_bedolaga ;;
@@ -482,7 +482,7 @@ install_bedolaga() {
     echo -e "${YELLOW}Где устанавливается бот?${NC}"
     echo -e "  ${CYAN}1)${NC} На том же сервере, где и панель"
     echo -e "  ${CYAN}2)${NC} На отдельном сервере"
-    read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор: )" server_location
+    read -p "${CYAN}▶${NC} Ваш выбор: " server_location
 
     if [[ "$server_location" == "1" ]]; then
         REMNAWAVE_API_URL="http://remnawave:3000"
@@ -850,7 +850,7 @@ EOF
 }
 
 # ============================================
-# ОБНОВЛЁННАЯ ФУНКЦИЯ: CLOUDFLARE DDNS (ВЫБОР ЗАПИСЕЙ) — ИСПРАВЛЕНА
+# ОБНОВЛЁННАЯ ФУНКЦИЯ: CLOUDFLARE DDNS (ВЫБОР ЗАПИСЕЙ)
 # ============================================
 install_cloudflare_ddns() {
     show_logo
@@ -1097,7 +1097,7 @@ install_admin_bot() {
     echo -e "${YELLOW}Где устанавливается Admin Bot?${NC}"
     echo -e "  ${CYAN}1)${NC} На том же сервере, где и панель"
     echo -e "  ${CYAN}2)${NC} На отдельном сервере"
-    read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор: )" server_location
+    read -p "${CYAN}▶${NC} Ваш выбор: " server_location
 
     if [[ "$server_location" == "1" ]]; then
         API_BASE_URL="http://remnawave:3000"
@@ -1227,7 +1227,7 @@ show_logs_menu() {
         echo -e "  ${CYAN}2)${NC} 📄 Логи страницы подписки"
         echo -e "  ${CYAN}0)${NC} 🔙 Назад в главное меню"
         echo ""
-        read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор: )" log_choice
+        read -p "${CYAN}▶${NC} Ваш выбор: " log_choice
 
         case $log_choice in
             1) show_panel_logs ;;
@@ -1284,7 +1284,7 @@ show_uninstall_menu() {
         echo -e "  ${CYAN}6)${NC} Удалить Cloudflare WARP"
         echo -e "  ${CYAN}7)${NC} Удалить ВСЁ (полная очистка)"
         echo -e "  ${CYAN}0)${NC} 🔙 Назад"
-        read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор: )" uninstall_choice
+        read -p "${CYAN}▶${NC} Ваш выбор: " uninstall_choice
 
         case $uninstall_choice in
             1) uninstall_panel ;;
@@ -1511,7 +1511,7 @@ show_remnawave_menu() {
         echo -e "  ${CYAN}2)${NC} 🖥️  Установить Ноду"
         echo -e "  ${CYAN}3)${NC} 🔄 Обновить компоненты"
         echo -e "  ${CYAN}0)${NC} 🔙 Назад"
-        read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор: )" choice
+        read -p "${CYAN}▶${NC} Ваш выбор: " choice
 
         case $choice in
             1) install_panel ;;
@@ -1530,7 +1530,7 @@ show_warp_menu() {
         echo -e "  ${CYAN}1)${NC} 🌐 Установить Cloudflare WARP"
         echo -e "  ${CYAN}2)${NC} 🗑️  Удалить Cloudflare WARP"
         echo -e "  ${CYAN}0)${NC} 🔙 Назад"
-        read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор: )" choice
+        read -p "${CYAN}▶${NC} Ваш выбор: " choice
 
         case $choice in
             1) install_warp ;;
@@ -1559,7 +1559,7 @@ while true; do
     echo -e "  ${CYAN}8)${NC} 🗑️  Удаление компонентов"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "  ${CYAN}0)${NC} 🚪 Выход"
-    read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор: )" main_choice
+    read -p "${CYAN}▶${NC} Ваш выбор: " main_choice
 
     case $main_choice in
         1) show_remnawave_menu ;;
