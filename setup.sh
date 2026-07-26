@@ -850,7 +850,7 @@ EOF
 }
 
 # ============================================
-# ОБНОВЛЁННАЯ ФУНКЦИЯ: CLOUDFLARE DDNS (ВЫБОР ЗАПИСЕЙ)
+# ИСПРАВЛЕННАЯ ФУНКЦИЯ: CLOUDFLARE DDNS (ВЫБОР ЗАПИСЕЙ)
 # ============================================
 install_cloudflare_ddns() {
     show_logo
@@ -902,7 +902,7 @@ install_cloudflare_ddns() {
     esac
 
     echo -e "\n${YELLOW}📡 Получаем список записей...${NC}"
-    RECORDS_JSON=""
+    RECORDS_JSON="[]"
     IFS=',' read -ra TYPES <<< "$RECORD_TYPES"
     for TYPE in "${TYPES[@]}"; do
         RESP=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=$TYPE&per_page=100" \
@@ -911,13 +911,20 @@ install_cloudflare_ddns() {
         if echo "$RESP" | jq -e '.success == true' >/dev/null; then
             RECORDS_JSON=$(echo "$RECORDS_JSON" | jq --argjson new "$(echo "$RESP" | jq '.result')" '. + $new')
         else
-            echo -e "${RED}❌ Ошибка получения записей типа $TYPE${NC}"
+            ERR_MSG=$(echo "$RESP" | jq -r '.errors[0].message // "Неизвестная ошибка"')
+            echo -e "${RED}❌ Ошибка получения записей типа $TYPE: $ERR_MSG${NC}"
         fi
     done
 
     RECORD_COUNT=$(echo "$RECORDS_JSON" | jq 'length')
+    if ! [[ "$RECORD_COUNT" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}❌ Не удалось получить количество записей. Проверьте токен и зону.${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
     if [ "$RECORD_COUNT" -eq 0 ]; then
-        echo -e "${RED}❌ В зоне не найдено записей типов $RECORD_TYPES.${NC}"
+        echo -e "${RED}❌ В зоне $ZONE_NAME не найдено записей типов $RECORD_TYPES.${NC}"
         read -p "Нажмите Enter для возврата..."
         return
     fi
