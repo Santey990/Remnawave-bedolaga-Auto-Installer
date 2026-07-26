@@ -850,13 +850,13 @@ EOF
 }
 
 # ============================================
-# ОБНОВЛЁННАЯ ФУНКЦИЯ: CLOUDFLARE DDNS (МНОГО ЗАПИСЕЙ)
+# ОБНОВЛЁННАЯ ФУНКЦИЯ: CLOUDFLARE DDNS (ВЫБОР ЗАПИСЕЙ)
 # ============================================
 install_cloudflare_ddns() {
     show_logo
-    echo -e "${BLUE}${BOLD}🌐 Настройка Cloudflare DDNS (несколько записей)${NC}\n"
-    echo -e "Этот скрипт настроит автоматическое обновление A/AAAA записей"
-    echo -e "при изменении внешнего IP вашего сервера.\n"
+    echo -e "${BLUE}${BOLD}🌐 Настройка Cloudflare DDNS (выбор записей)${NC}\n"
+    echo -e "Этот скрипт покажет все DNS-записи в зоне и позволит выбрать,"
+    echo -e "какие из них автоматически обновлять при смене IP.\n"
 
     if ! command -v jq &> /dev/null; then
         echo -e "${YELLOW}📦 Устанавливаем jq...${NC}"
@@ -877,30 +877,6 @@ install_cloudflare_ddns() {
         return
     fi
 
-    # Запрашиваем список записей через запятую
-    read -p "📝 Введите имена записей через запятую (например, panel,bot,@): " RECORD_NAMES_INPUT
-    if [ -z "$RECORD_NAMES_INPUT" ]; then
-        echo -e "${RED}❌ Имена записей обязательны!${NC}"
-        read -p "Нажмите Enter для возврата..."
-        return
-    fi
-
-    # Очищаем от пробелов, разбиваем в массив
-    RECORD_NAMES=$(echo "$RECORD_NAMES_INPUT" | tr -d ' ' | tr ',' '\n')
-    # Проверяем, что не пусто
-    if [ -z "$RECORD_NAMES" ]; then
-        echo -e "${RED}❌ Не введено ни одного имени.${NC}"
-        read -p "Нажмите Enter для возврата..."
-        return
-    fi
-
-    read -p "🔄 Тип записей (A — IPv4, AAAA — IPv6) [A]: " RECORD_TYPE
-    RECORD_TYPE=${RECORD_TYPE:-A}
-    if [[ "$RECORD_TYPE" != "A" && "$RECORD_TYPE" != "AAAA" ]]; then
-        echo -e "${RED}❌ Неверный тип. Используем A.${NC}"
-        RECORD_TYPE="A"
-    fi
-
     echo -e "\n${YELLOW}⏳ Проверяем API токен и получаем zone_id...${NC}"
     ZONE_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ZONE_NAME" \
         -H "Authorization: Bearer $CF_API_TOKEN" \
@@ -913,67 +889,159 @@ install_cloudflare_ddns() {
     fi
     echo -e "${GREEN}✅ Zone ID получен: $ZONE_ID${NC}"
 
+    echo -e "\n${BOLD}Какой тип записей показывать?${NC}"
+    echo "  1) Только A (IPv4)"
+    echo "  2) Только AAAA (IPv6)"
+    echo "  3) Все (A и AAAA)"
+    read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор (1-3): )" type_choice
+    case $type_choice in
+        1) RECORD_TYPES="A" ;;
+        2) RECORD_TYPES="AAAA" ;;
+        3) RECORD_TYPES="A,AAAA" ;;
+        *) echo -e "${RED}❌ Неверный выбор. Используем A.${NC}"; RECORD_TYPES="A" ;;
+    esac
+
+    echo -e "\n${YELLOW}📡 Получаем список записей...${NC}"
+    RECORDS_JSON=""
+    IFS=',' read -ra TYPES <<< "$RECORD_TYPES"
+    for TYPE in "${TYPES[@]}"; do
+        RESP=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=$TYPE&per_page=100" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json")
+        if echo "$RESP" | jq -e '.success == true' >/dev/null; then
+            RECORDS_JSON=$(echo "$RECORDS_JSON" | jq --argjson new "$(echo "$RESP" | jq '.result')" '. + $new')
+        else
+            echo -e "${RED}❌ Ошибка получения записей типа $TYPE${NC}"
+        fi
+    done
+
+    RECORD_COUNT=$(echo "$RECORDS_JSON" | jq 'length')
+    if [ "$RECORD_COUNT" -eq 0 ]; then
+        echo -e "${RED}❌ В зоне не найдено записей типов $RECORD_TYPES.${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    echo -e "\n${CYAN}${BOLD}Список записей в зоне $ZONE_NAME:${NC}"
+    echo "  № | Имя записи                | Тип | Содержимое"
+    echo "----+---------------------------+-----+------------------"
+    INDEX=1
+    declare -a RECORD_NAMES_ARRAY
+    while IFS= read -r line; do
+        NAME=$(echo "$line" | jq -r '.name')
+        TYPE=$(echo "$line" | jq -r '.type')
+        CONTENT=$(echo "$line" | jq -r '.content')
+        printf "  %2d | %-25s | %-3s | %s\n" $INDEX "$NAME" "$TYPE" "$CONTENT"
+        RECORD_NAMES_ARRAY[$INDEX]="$NAME:$TYPE"
+        ((INDEX++))
+    done < <(echo "$RECORDS_JSON" | jq -c '.[]')
+
+    echo ""
+    read -p "Введите номера записей, которые нужно обновлять (через запятую, например 1,3,5) или 'all' для всех: " SELECTION
+    if [ -z "$SELECTION" ]; then
+        echo -e "${RED}❌ Выбор не сделан. Отмена.${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    SELECTED_RECORDS=()
+    if [ "$SELECTION" == "all" ]; then
+        for i in "${!RECORD_NAMES_ARRAY[@]}"; do
+            if [ -n "${RECORD_NAMES_ARRAY[$i]}" ]; then
+                SELECTED_RECORDS+=("${RECORD_NAMES_ARRAY[$i]}")
+            fi
+        done
+    else
+        IFS=',' read -ra INDICES <<< "$SELECTION"
+        for idx in "${INDICES[@]}"; do
+            idx=$(echo "$idx" | xargs)
+            if [[ "$idx" =~ ^[0-9]+$ ]] && [ "$idx" -ge 1 ] && [ "$idx" -lt "$INDEX" ]; then
+                SELECTED_RECORDS+=("${RECORD_NAMES_ARRAY[$idx]}")
+            else
+                echo -e "${YELLOW}⚠️  Номер $idx неверен, пропускаем.${NC}"
+            fi
+        done
+    fi
+
+    if [ ${#SELECTED_RECORDS[@]} -eq 0 ]; then
+        echo -e "${RED}❌ Не выбрано ни одной корректной записи. Отмена.${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    echo -e "\n${GREEN}Будут обновляться записи:${NC}"
+    for rec in "${SELECTED_RECORDS[@]}"; do
+        echo "  - $rec"
+    done
+    read -p "Продолжить? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
     mkdir -p /opt/cloudflare-ddns
 
-    # Создаём скрипт обновления с циклом по записям
     cat > /opt/cloudflare-ddns/update.sh <<'EOF'
 #!/bin/bash
 
 CF_API_TOKEN="__TOKEN__"
 ZONE_ID="__ZONE_ID__"
-RECORD_TYPE="__RECORD_TYPE__"
-RECORD_NAMES_LIST="__RECORD_NAMES__"
+RECORDS="__RECORDS__"
 
-# Получаем текущий IP
-if [ "$RECORD_TYPE" == "A" ]; then
-    CURRENT_IP=$(curl -s -4 https://api.ipify.org)
-else
-    CURRENT_IP=$(curl -s -6 https://api6.ipify.org)
-fi
+get_ip() {
+    local type=$1
+    if [ "$type" == "A" ]; then
+        curl -s -4 https://api.ipify.org
+    elif [ "$type" == "AAAA" ]; then
+        curl -s -6 https://api6.ipify.org
+    else
+        echo ""
+    fi
+}
 
-if [ -z "$CURRENT_IP" ]; then
-    echo "❌ Не удалось получить IP"
-    exit 1
-fi
+for record in $RECORDS; do
+    NAME=$(echo $record | cut -d: -f1)
+    TYPE=$(echo $record | cut -d: -f2)
+    CURRENT_IP=$(get_ip $TYPE)
+    if [ -z "$CURRENT_IP" ]; then
+        echo "❌ Не удалось получить IP для $NAME ($TYPE)"
+        continue
+    fi
 
-# Разбиваем список записей
-IFS=',' read -ra NAMES <<< "$RECORD_NAMES_LIST"
-
-for RECORD_NAME in "${NAMES[@]}"; do
-    echo "🔍 Обработка записи: $RECORD_NAME"
-    # Получаем ID записи
-    RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=$RECORD_TYPE&name=$RECORD_NAME" \
+    RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=$TYPE&name=$NAME" \
         -H "Authorization: Bearer $CF_API_TOKEN" \
         -H "Content-Type: application/json" | jq -r '.result[0].id')
 
     if [ -z "$RECORD_ID" ] || [ "$RECORD_ID" == "null" ]; then
-        echo "❌ Запись $RECORD_NAME не найдена. Создаём..."
+        echo "❌ Запись $NAME не найдена. Создаём..."
         curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json" \
-            --data "{\"type\":\"$RECORD_TYPE\",\"name\":\"$RECORD_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}" > /dev/null
-        echo "✅ Запись $RECORD_NAME создана с IP $CURRENT_IP"
+            --data "{\"type\":\"$TYPE\",\"name\":\"$NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}" > /dev/null
+        echo "✅ Запись $NAME создана с IP $CURRENT_IP"
     else
-        # Обновляем запись
         curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json" \
-            --data "{\"type\":\"$RECORD_TYPE\",\"name\":\"$RECORD_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}" > /dev/null
-        echo "✅ Запись $RECORD_NAME обновлена: $CURRENT_IP"
+            --data "{\"type\":\"$TYPE\",\"name\":\"$NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}" > /dev/null
+        echo "✅ Запись $NAME обновлена: $CURRENT_IP"
     fi
 done
 EOF
 
-    # Подставляем переменные
-    RECORD_NAMES_CSV=$(echo "$RECORD_NAMES" | tr '\n' ',' | sed 's/,$//')
+    RECORDS_STR=""
+    for rec in "${SELECTED_RECORDS[@]}"; do
+        RECORDS_STR="$RECORDS_STR $rec"
+    done
+    RECORDS_STR=$(echo "$RECORDS_STR" | sed 's/^ //')
+
     sed -i "s|__TOKEN__|$CF_API_TOKEN|g" /opt/cloudflare-ddns/update.sh
     sed -i "s|__ZONE_ID__|$ZONE_ID|g" /opt/cloudflare-ddns/update.sh
-    sed -i "s|__RECORD_TYPE__|$RECORD_TYPE|g" /opt/cloudflare-ddns/update.sh
-    sed -i "s|__RECORD_NAMES__|$RECORD_NAMES_CSV|g" /opt/cloudflare-ddns/update.sh
+    sed -i "s|__RECORDS__|$RECORDS_STR|g" /opt/cloudflare-ddns/update.sh
 
     chmod +x /opt/cloudflare-ddns/update.sh
 
-    # Создаём systemd-сервис
     cat > /etc/systemd/system/cloudflare-ddns.service <<EOF
 [Unit]
 Description=Cloudflare DDNS Updater (multi-record)
@@ -986,7 +1054,6 @@ ExecStart=/opt/cloudflare-ddns/update.sh
 User=root
 EOF
 
-    # Таймер (каждые 5 минут)
     cat > /etc/systemd/system/cloudflare-ddns.timer <<EOF
 [Unit]
 Description=Cloudflare DDNS timer (every 5 minutes)
@@ -1007,11 +1074,10 @@ EOF
     echo -e "${YELLOW}🔄 Выполняем первое обновление...${NC}"
     /opt/cloudflare-ddns/update.sh
 
-    # Формируем список записей для вывода
-    RECORD_LIST_DISPLAY=$(echo "$RECORD_NAMES" | sed ':a;N;s/\n/, /g;ta' | sed 's/, $//')
-    echo -e "\n${GREEN}${BOLD}✅ Cloudflare DDNS настроен для записей:${NC}"
-    echo -e "📌 Записи: $RECORD_LIST_DISPLAY"
-    echo -e "🌐 Зона: $ZONE_NAME ($RECORD_TYPE)"
+    echo -e "\n${GREEN}${BOLD}✅ Cloudflare DDNS настроен для выбранных записей:${NC}"
+    for rec in "${SELECTED_RECORDS[@]}"; do
+        echo "  - $rec"
+    done
     echo -e "⏱️  Обновление каждые 5 минут (таймер active)"
     echo -e "📋 Лог: journalctl -u cloudflare-ddns -f"
     echo -e "🔄 Принудительный запуск: systemctl start cloudflare-ddns"
@@ -1489,7 +1555,7 @@ while true; do
     echo -e "  ${CYAN}4)${NC} 🌐 Cloudflare WARP"
     echo -e "  ${CYAN}5)${NC} 💾 Бэкапы"
     echo -e "  ${CYAN}6)${NC} 📋 Логи"
-    echo -e "  ${CYAN}7)${NC} 🌐 Cloudflare DDNS (много записей)"
+    echo -e "  ${CYAN}7)${NC} 🌐 Cloudflare DDNS (выбор записей)"
     echo -e "  ${CYAN}8)${NC} 🗑️  Удаление компонентов"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "  ${CYAN}0)${NC} 🚪 Выход"
