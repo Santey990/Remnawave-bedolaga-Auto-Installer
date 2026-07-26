@@ -858,7 +858,6 @@ install_cloudflare_ddns() {
     echo -e "Этот скрипт настроит автоматическое обновление A/AAAA записи"
     echo -e "при изменении внешнего IP вашего сервера.\n"
 
-    # Проверяем наличие jq и curl
     if ! command -v jq &> /dev/null; then
         echo -e "${YELLOW}📦 Устанавливаем jq...${NC}"
         apt-get update -qq && apt-get install -y -qq jq curl >/dev/null 2>&1
@@ -904,18 +903,15 @@ install_cloudflare_ddns() {
     fi
     echo -e "${GREEN}✅ Zone ID получен: $ZONE_ID${NC}"
 
-    # Создаём папку для скрипта
     mkdir -p /opt/cloudflare-ddns
     cat > /opt/cloudflare-ddns/update.sh <<'EOF'
 #!/bin/bash
 
-# Конфигурация (заполняется автоматически при установке)
 CF_API_TOKEN="__TOKEN__"
 ZONE_ID="__ZONE_ID__"
 RECORD_NAME="__RECORD_NAME__"
 RECORD_TYPE="__RECORD_TYPE__"
 
-# Получаем текущий внешний IP
 if [ "$RECORD_TYPE" == "A" ]; then
     CURRENT_IP=$(curl -s -4 https://api.ipify.org)
 else
@@ -927,7 +923,6 @@ if [ -z "$CURRENT_IP" ]; then
     exit 1
 fi
 
-# Получаем ID записи
 RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=$RECORD_TYPE&name=$RECORD_NAME" \
     -H "Authorization: Bearer $CF_API_TOKEN" \
     -H "Content-Type: application/json" | jq -r '.result[0].id')
@@ -940,7 +935,6 @@ if [ -z "$RECORD_ID" ] || [ "$RECORD_ID" == "null" ]; then
         --data "{\"type\":\"$RECORD_TYPE\",\"name\":\"$RECORD_NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}" > /dev/null
     echo "✅ Запись создана."
 else
-    # Обновляем запись
     curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID" \
         -H "Authorization: Bearer $CF_API_TOKEN" \
         -H "Content-Type: application/json" \
@@ -949,7 +943,6 @@ else
 fi
 EOF
 
-    # Подставляем переменные
     sed -i "s|__TOKEN__|$CF_API_TOKEN|g" /opt/cloudflare-ddns/update.sh
     sed -i "s|__ZONE_ID__|$ZONE_ID|g" /opt/cloudflare-ddns/update.sh
     sed -i "s|__RECORD_NAME__|$RECORD_NAME|g" /opt/cloudflare-ddns/update.sh
@@ -957,7 +950,6 @@ EOF
 
     chmod +x /opt/cloudflare-ddns/update.sh
 
-    # Создаём systemd-сервис
     cat > /etc/systemd/system/cloudflare-ddns.service <<EOF
 [Unit]
 Description=Cloudflare DDNS Updater
@@ -970,7 +962,6 @@ ExecStart=/opt/cloudflare-ddns/update.sh
 User=root
 EOF
 
-    # Создаём systemd-таймер (каждые 5 минут)
     cat > /etc/systemd/system/cloudflare-ddns.timer <<EOF
 [Unit]
 Description=Cloudflare DDNS timer (every 5 minutes)
@@ -988,7 +979,6 @@ EOF
     systemctl enable cloudflare-ddns.timer
     systemctl start cloudflare-ddns.timer
 
-    # Первый запуск
     echo -e "${YELLOW}🔄 Выполняем первое обновление...${NC}"
     /opt/cloudflare-ddns/update.sh
 
@@ -1185,6 +1175,257 @@ show_subscription_logs() {
 }
 
 # ============================================
+# НОВЫЙ РАЗДЕЛ: УДАЛЕНИЕ КОМПОНЕНТОВ
+# ============================================
+show_uninstall_menu() {
+    while true; do
+        show_logo
+        echo -e "${RED}${BOLD}🗑️  Удаление компонентов${NC}\n"
+        echo -e "${YELLOW}ВНИМАНИЕ: Удаление безвозвратно!${NC}\n"
+        echo -e "  ${CYAN}1)${NC} Удалить Remnawave Panel (включая подписку)"
+        echo -e "  ${CYAN}2)${NC} Удалить Bedolaga Bot"
+        echo -e "  ${CYAN}3)${NC} Удалить Bedolaga Cabinet"
+        echo -e "  ${CYAN}4)${NC} Удалить Caddy (весь прокси)"
+        echo -e "  ${CYAN}5)${NC} Удалить Cloudflare DDNS"
+        echo -e "  ${CYAN}6)${NC} Удалить Cloudflare WARP"
+        echo -e "  ${CYAN}7)${NC} Удалить ВСЁ (полная очистка)"
+        echo -e "  ${CYAN}0)${NC} 🔙 Назад"
+        read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор: )" uninstall_choice
+
+        case $uninstall_choice in
+            1) uninstall_panel ;;
+            2) uninstall_bedolaga_bot ;;
+            3) uninstall_cabinet ;;
+            4) uninstall_caddy ;;
+            5) uninstall_ddns ;;
+            6) uninstall_warp ;;
+            7) uninstall_all ;;
+            0) break ;;
+            *) echo -e "${RED}❌ Неверный выбор.${NC}"; sleep 2 ;;
+        esac
+    done
+}
+
+uninstall_panel() {
+    show_logo
+    echo -e "${RED}${BOLD}🗑️  Удаление Remnawave Panel${NC}\n"
+    read -p "Вы уверены, что хотите удалить панель и все её данные? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    # Останавливаем и удаляем контейнеры
+    if [ -d "/opt/remnawave" ]; then
+        cd /opt/remnawave
+        docker compose down -v 2>/dev/null
+        cd ..
+        rm -rf /opt/remnawave
+        echo -e "${GREEN}✅ Панель Remnawave удалена.${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Панель не найдена.${NC}"
+    fi
+
+    # Удаляем блоки Caddy для панели и подписки (по содержимому)
+    blocks_dir="/opt/remnawave/caddy/blocks"
+    if [ -d "$blocks_dir" ]; then
+        for block_file in "$blocks_dir"/*; do
+            if [ -f "$block_file" ]; then
+                if grep -q "reverse_proxy.*remnawave:3000" "$block_file" || grep -q "reverse_proxy.*remnawave-subscription-page:3010" "$block_file"; then
+                    rm -f "$block_file"
+                    echo -e "${GREEN}✅ Удалён блок $(basename "$block_file")${NC}"
+                fi
+            fi
+        done
+        rebuild_caddyfile
+    fi
+
+    # Перезапускаем Caddy
+    if check_caddy_installed; then
+        cd /opt/remnawave/caddy
+        docker compose restart
+        echo -e "${GREEN}✅ Caddy перезапущен.${NC}"
+    fi
+
+    echo -e "${GREEN}✅ Удаление панели завершено.${NC}"
+    read -p "Нажмите Enter для возврата..."
+}
+
+uninstall_bedolaga_bot() {
+    show_logo
+    echo -e "${RED}${BOLD}🗑️  Удаление Bedolaga Bot${NC}\n"
+    read -p "Вы уверены, что хотите удалить бота? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    # Определяем домен бота из .env
+    BOT_DOMAIN=""
+    if [ -f "/opt/bedolaga-bot/.env" ]; then
+        BOT_DOMAIN=$(grep -E "^WEBHOOK_URL=" /opt/bedolaga-bot/.env | sed -E 's|^WEBHOOK_URL=https?://([^:/]+).*$|\1|')
+    fi
+
+    # Останавливаем и удаляем контейнеры
+    if [ -d "/opt/bedolaga-bot" ]; then
+        cd /opt/bedolaga-bot
+        docker compose down -v 2>/dev/null
+        cd ..
+        rm -rf /opt/bedolaga-bot
+        echo -e "${GREEN}✅ Bedolaga Bot удалён.${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Бот не найден.${NC}"
+    fi
+
+    # Удаляем блок Caddy
+    if [ -n "$BOT_DOMAIN" ]; then
+        remove_caddy_block "$BOT_DOMAIN"
+    fi
+
+    # Перезапускаем Caddy
+    if check_caddy_installed; then
+        cd /opt/remnawave/caddy
+        docker compose restart
+        echo -e "${GREEN}✅ Caddy перезапущен.${NC}"
+    fi
+
+    echo -e "${GREEN}✅ Удаление бота завершено.${NC}"
+    read -p "Нажмите Enter для возврата..."
+}
+
+uninstall_cabinet() {
+    show_logo
+    echo -e "${RED}${BOLD}🗑️  Удаление Bedolaga Cabinet${NC}\n"
+    read -p "Вы уверены, что хотите удалить Cabinet? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    # Определяем домен кабинета из .env
+    CABINET_DOMAIN=""
+    if [ -f "/opt/bedolaga-cabinet/.env" ]; then
+        CABINET_DOMAIN=$(grep -E "^VITE_API_URL=" /opt/bedolaga-cabinet/.env | sed -E 's|^.*//([^:/]+).*$|\1|')
+    fi
+
+    # Останавливаем и удаляем контейнеры
+    if [ -d "/opt/bedolaga-cabinet" ]; then
+        cd /opt/bedolaga-cabinet
+        docker compose down -v 2>/dev/null
+        cd ..
+        rm -rf /opt/bedolaga-cabinet
+        echo -e "${GREEN}✅ Bedolaga Cabinet удалён.${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Cabinet не найден.${NC}"
+    fi
+
+    # Удаляем статику
+    if [ -d "/srv/cabinet" ]; then
+        rm -rf /srv/cabinet
+        echo -e "${GREEN}✅ Статика кабинета удалена.${NC}"
+    fi
+
+    # Удаляем блок Caddy
+    if [ -n "$CABINET_DOMAIN" ]; then
+        remove_caddy_block "$CABINET_DOMAIN"
+    fi
+
+    # Перезапускаем Caddy
+    if check_caddy_installed; then
+        cd /opt/remnawave/caddy
+        docker compose restart
+        echo -e "${GREEN}✅ Caddy перезапущен.${NC}"
+    fi
+
+    echo -e "${GREEN}✅ Удаление Cabinet завершено.${NC}"
+    read -p "Нажмите Enter для возврата..."
+}
+
+uninstall_caddy() {
+    show_logo
+    echo -e "${RED}${BOLD}🗑️  Удаление Caddy${NC}\n"
+    read -p "Вы уверены, что хотите удалить Caddy и все SSL-сертификаты? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    # Останавливаем и удаляем контейнер Caddy
+    if [ -d "/opt/remnawave/caddy" ]; then
+        cd /opt/remnawave/caddy
+        docker compose down -v 2>/dev/null
+        cd ..
+        rm -rf /opt/remnawave/caddy
+        echo -e "${GREEN}✅ Caddy удалён.${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Caddy не найден.${NC}"
+    fi
+
+    # Удаляем том с SSL
+    docker volume rm caddy-ssl-data 2>/dev/null
+
+    echo -e "${GREEN}✅ Удаление Caddy завершено.${NC}"
+    read -p "Нажмите Enter для возврата..."
+}
+
+uninstall_ddns() {
+    show_logo
+    echo -e "${RED}${BOLD}🗑️  Удаление Cloudflare DDNS${NC}\n"
+    read -p "Вы уверены, что хотите удалить DDNS? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    # Останавливаем и отключаем таймер
+    systemctl stop cloudflare-ddns.timer 2>/dev/null
+    systemctl disable cloudflare-ddns.timer 2>/dev/null
+    systemctl stop cloudflare-ddns.service 2>/dev/null
+    systemctl disable cloudflare-ddns.service 2>/dev/null
+
+    # Удаляем файлы systemd
+    rm -f /etc/systemd/system/cloudflare-ddns.timer
+    rm -f /etc/systemd/system/cloudflare-ddns.service
+    systemctl daemon-reload
+
+    # Удаляем скрипты
+    rm -rf /opt/cloudflare-ddns
+
+    echo -e "${GREEN}✅ Cloudflare DDNS удалён.${NC}"
+    read -p "Нажмите Enter для возврата..."
+}
+
+uninstall_all() {
+    show_logo
+    echo -e "${RED}${BOLD}🗑️  ПОЛНАЯ ОЧИСТКА ВСЕХ КОМПОНЕНТОВ${NC}\n"
+    read -p "ВНИМАНИЕ! Это удалит всё: панель, бота, кабинет, Caddy, DDNS, WARP. Продолжить? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    # Последовательно удаляем всё
+    uninstall_panel
+    uninstall_bedolaga_bot
+    uninstall_cabinet
+    uninstall_caddy
+    uninstall_ddns
+    uninstall_warp
+
+    # Дополнительная очистка
+    docker system prune -af --volumes 2>/dev/null
+
+    echo -e "${GREEN}${BOLD}✅ Полная очистка завершена!${NC}"
+    read -p "Нажмите Enter для возврата..."
+}
+
+# ============================================
 # ПОДМЕНЮ
 # ============================================
 show_remnawave_menu() {
@@ -1239,7 +1480,8 @@ while true; do
     echo -e "  ${CYAN}4)${NC} 🌐 Cloudflare WARP"
     echo -e "  ${CYAN}5)${NC} 💾 Бэкапы"
     echo -e "  ${CYAN}6)${NC} 📋 Логи"
-    echo -e "  ${CYAN}7)${NC} 🌐 Cloudflare DDNS (обновление IP)"
+    echo -e "  ${CYAN}7)${NC} 🌐 Cloudflare DDNS"
+    echo -e "  ${CYAN}8)${NC} 🗑️  Удаление компонентов"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "  ${CYAN}0)${NC} 🚪 Выход"
     read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор: )" main_choice
@@ -1252,6 +1494,7 @@ while true; do
         5) run_backup ;;
         6) show_logs_menu ;;
         7) install_cloudflare_ddns ;;
+        8) show_uninstall_menu ;;
         0) echo -e "${GREEN}👋 До свидания!${NC}"; exit 0 ;;
         *) echo -e "${RED}❌ Неверный выбор.${NC}"; sleep 2 ;;
     esac
