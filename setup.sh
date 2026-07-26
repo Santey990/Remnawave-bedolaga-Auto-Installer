@@ -850,7 +850,7 @@ EOF
 }
 
 # ============================================
-# ОБНОВЛЁННАЯ ФУНКЦИЯ: CLOUDFLARE DDNS (ВЫБОР ЗАПИСЕЙ)
+# ОБНОВЛЁННАЯ ФУНКЦИЯ: CLOUDFLARE DDNS (ВЫБОР ЗАПИСЕЙ) — ИСПРАВЛЕНА
 # ============================================
 install_cloudflare_ddns() {
     show_logo
@@ -893,7 +893,7 @@ install_cloudflare_ddns() {
     echo "  1) Только A (IPv4)"
     echo "  2) Только AAAA (IPv6)"
     echo "  3) Все (A и AAAA)"
-    read -p "$(echo -e ${CYAN}▶${NC} Ваш выбор (1-3): )" type_choice
+    read -p "${CYAN}▶${NC} Ваш выбор (1-3): " type_choice
     case $type_choice in
         1) RECORD_TYPES="A" ;;
         2) RECORD_TYPES="AAAA" ;;
