@@ -1,1 +1,1 @@
-sudo bash <(curl -s https://raw.githubusercontent.com/Santey990/Remnawave-bedolaga-Auto-Installer/main/install.sh)
+curl -s https://raw.githubusercontent.com/Santey990/Remnawave-bedolaga-Auto-Installer/main/install.sh | sudo bash -s
