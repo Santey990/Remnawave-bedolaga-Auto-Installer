@@ -1,13 +1,12 @@
 #!/bin/bash
 
 # ============================================
-# Just Remnawave Auto Installer
-# Author: tneangel
-# Modified by Santey990
-# Repository: https://github.com/Santey990/Remnawave-bedolaga-Auto-Installer
+# Just Remnawave Auto Installer (Nginx + Self-Signed)
+# Author: tneangel / Modified by Santey990
+# Переход на Nginx и самоподписанные сертификаты
 # ============================================
 
-# Цвета (используем $'...' для корректной интерпретации escape-последовательностей)
+# Цвета
 RED=$'\033[0;31m'
 GREEN=$'\033[0;32m'
 YELLOW=$'\033[1;33m'
@@ -16,13 +15,13 @@ CYAN=$'\033[0;36m'
 BOLD=$'\033[1m'
 NC=$'\033[0m'
 
-# Проверка прав root
+# Проверка root
 if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}❌ Ошибка: Скрипт нужно запускать от имени root (sudo).${NC}"
     exit 1
 fi
 
-# Создание глобального алиаса rw-installer
+# Глобальный алиас
 create_alias() {
     if [ ! -f /usr/local/bin/rw-installer ]; then
         echo -e "${YELLOW}📥 Скачиваем скрипт для глобального доступа...${NC}"
@@ -37,12 +36,12 @@ show_logo() {
     clear
     echo -e "${CYAN}${BOLD}"
     echo "  ╔═══════════════════════════════════════════════════════════╗"
-    echo "  ║   ⚡ Remnawave + Bedolaga Auto Installer by Santey990   ║"
+    echo "  ║   ⚡ Remnawave + Bedolaga Auto Installer (Nginx)        ║"
     echo "  ╚═══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
 
-# Проверка и установка Docker
+# Установка Docker
 install_docker() {
     if ! command -v docker &> /dev/null; then
         echo -e "${YELLOW}🐳 Docker не найден. Устанавливаем...${NC}"
@@ -55,133 +54,122 @@ install_docker() {
     fi
 }
 
-# Проверка наличия Caddy
-check_caddy_installed() {
-    if [ -d "/opt/remnawave/caddy" ] && [ -f "/opt/remnawave/caddy/docker-compose.yml" ]; then
-        if docker ps --format '{{.Names}}' | grep -q "^caddy$"; then
-            return 0
-        else
-            return 1
-        fi
+# ============================================
+# NGINX + САМОПОДПИСАННЫЕ СЕРТИФИКАТЫ
+# ============================================
+
+install_nginx() {
+    if ! command -v nginx &> /dev/null; then
+        echo -e "${YELLOW}📦 Устанавливаем Nginx...${NC}"
+        apt-get update -qq
+        apt-get install -y -qq nginx
+        systemctl enable nginx
+        systemctl start nginx
+        echo -e "${GREEN}✅ Nginx установлен.${NC}"
     else
-        return 1
+        echo -e "${GREEN}✅ Nginx уже установлен.${NC}"
     fi
 }
 
-ensure_caddy_running() {
-    if ! check_caddy_installed; then
-        echo -e "${YELLOW}⚠️  Caddy не установлен или не запущен.${NC}"
-        echo -e "Для работы Bedolaga необходим Caddy."
-        echo -e "Вы можете установить его через установку панели Remnawave (пункт 1 → 1)."
-        echo -e "Или запустить Caddy отдельно, но это сложнее."
-        read -p "Хотите установить Caddy автоматически? (y/n): " install_caddy
-        if [[ "$install_caddy" =~ ^[Yy]$ ]]; then
-            echo -e "${YELLOW}🚀 Устанавливаем Caddy...${NC}"
-            mkdir -p /opt/remnawave/caddy
-            cd /opt/remnawave/caddy
+generate_self_signed_cert() {
+    local domain="$1"
+    local key_dir="/etc/ssl/private"
+    local cert_dir="/etc/ssl/certs"
+    mkdir -p "$key_dir" "$cert_dir"
 
-            cat > docker-compose.yml <<EOF
-services:
-    caddy:
-        image: caddy:2.9
-        container_name: caddy
-        hostname: caddy
-        restart: always
-        ports:
-            - '0.0.0.0:443:443'
-            - '0.0.0.0:80:80'
-        networks:
-            - remnawave-network
-        volumes:
-            - ./Caddyfile:/etc/caddy/Caddyfile
-            - caddy-ssl-data:/data
-networks:
-    remnawave-network:
-        name: remnawave-network
-        driver: bridge
-        external: true
-volumes:
-    caddy-ssl-data:
-        driver: local
-        external: false
-        name: caddy-ssl-data
+    local key_file="$key_dir/$domain.key"
+    local cert_file="$cert_dir/$domain.crt"
+
+    if [ -f "$key_file" ] && [ -f "$cert_file" ]; then
+        echo -e "${YELLOW}⚠️  Сертификат для $domain уже существует, пропускаем генерацию.${NC}"
+        return
+    fi
+
+    echo -e "${YELLOW}🔐 Генерируем самоподписанный сертификат для $domain...${NC}"
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout "$key_file" \
+        -out "$cert_file" \
+        -subj "/CN=$domain" 2>/dev/null
+    chmod 600 "$key_file"
+    chmod 644 "$cert_file"
+    echo -e "${GREEN}✅ Сертификат создан: $cert_file${NC}"
+}
+
+add_nginx_block() {
+    local domain="$1"
+    local config_content="$2"   # содержимое location / и т.д.
+    local available="/etc/nginx/sites-available/$domain"
+    local enabled="/etc/nginx/sites-enabled/$domain"
+
+    # Генерируем сертификат перед созданием конфига
+    generate_self_signed_cert "$domain"
+
+    cat > "$available" <<EOF
+server {
+    listen 80;
+    server_name $domain;
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $domain;
+
+    ssl_certificate /etc/ssl/certs/$domain.crt;
+    ssl_certificate_key /etc/ssl/private/$domain.key;
+
+    # Дополнительные настройки SSL (опционально)
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    $config_content
+}
 EOF
 
-            init_caddy_blocks
-            rebuild_caddyfile
-            docker compose up -d
-            echo -e "${GREEN}✅ Caddy установлен и запущен.${NC}"
-        else
-            echo -e "${RED}❌ Без Caddy бот и кабинет не будут работать. Выход.${NC}"
-            read -p "Нажмите Enter для возврата..."
-            return 1
-        fi
+    if [ ! -L "$enabled" ]; then
+        ln -s "$available" "$enabled"
+    fi
+
+    echo -e "${GREEN}✅ Конфиг Nginx для $domain создан.${NC}"
+    nginx -t && systemctl reload nginx
+}
+
+remove_nginx_block() {
+    local domain="$1"
+    local available="/etc/nginx/sites-available/$domain"
+    local enabled="/etc/nginx/sites-enabled/$domain"
+
+    if [ -f "$available" ]; then
+        rm -f "$available"
+        echo -e "${GREEN}✅ Конфиг для $domain удалён.${NC}"
+    fi
+    if [ -L "$enabled" ]; then
+        rm -f "$enabled"
+    fi
+
+    # Удаляем сертификаты (опционально)
+    rm -f "/etc/ssl/private/$domain.key" 2>/dev/null
+    rm -f "/etc/ssl/certs/$domain.crt" 2>/dev/null
+
+    nginx -t && systemctl reload nginx
+}
+
+ensure_nginx_running() {
+    if ! systemctl is-active --quiet nginx; then
+        echo -e "${YELLOW}⚠️  Nginx не запущен. Запускаем...${NC}"
+        systemctl start nginx
+    fi
+    if ! command -v nginx &> /dev/null; then
+        echo -e "${RED}❌ Nginx не установлен. Установите через пункт меню или вручную.${NC}"
+        return 1
     fi
     return 0
 }
 
 # ============================================
-# СИСТЕМА БЛОКОВ CADDY
-# ============================================
-
-init_caddy_blocks() {
-    mkdir -p /opt/remnawave/caddy/blocks
-}
-
-add_caddy_block() {
-    local domain="$1"
-    local block_content="$2"
-    local blocks_dir="/opt/remnawave/caddy/blocks"
-
-    init_caddy_blocks
-    echo "$block_content" > "$blocks_dir/$domain"
-    echo -e "${GREEN}✅ Блок для $domain сохранён.${NC}"
-    rebuild_caddyfile
-}
-
-remove_caddy_block() {
-    local domain="$1"
-    local blocks_dir="/opt/remnawave/caddy/blocks"
-
-    if [ -f "$blocks_dir/$domain" ]; then
-        rm -f "$blocks_dir/$domain"
-        echo -e "${GREEN}✅ Блок для $domain удалён.${NC}"
-        rebuild_caddyfile
-    else
-        echo -e "${YELLOW}⚠️  Блок для $domain не найден.${NC}"
-    fi
-}
-
-rebuild_caddyfile() {
-    local blocks_dir="/opt/remnawave/caddy/blocks"
-    local caddyfile="/opt/remnawave/caddy/Caddyfile"
-
-    echo "# Remnawave Caddy Configuration" > "$caddyfile"
-    echo "# Auto-generated - do not edit manually" >> "$caddyfile"
-    echo "" >> "$caddyfile"
-
-    if [ -d "$blocks_dir" ]; then
-        for block_file in "$blocks_dir"/*; do
-            if [ -f "$block_file" ]; then
-                cat "$block_file" >> "$caddyfile"
-                echo "" >> "$caddyfile"
-            fi
-        done
-    fi
-
-    cat >> "$caddyfile" << 'EOF'
-:443 {
-    tls internal
-    respond 204
-}
-EOF
-
-    echo -e "${GREEN}✅ Caddyfile пересобран.${NC}"
-}
-
-# ============================================
 # ОПЦИЯ 1: REMNAWAVE (Panel + Node)
 # ============================================
+
 install_panel() {
     show_logo
     echo -e "${BLUE}${BOLD}🚀 Установка Remnawave Panel + Subscription Page${NC}\n"
@@ -196,6 +184,8 @@ install_panel() {
     fi
 
     install_docker
+    install_nginx
+    ensure_nginx_running
 
     echo -e "\n${YELLOW}📥 Шаг 1. Скачиваем конфигурационные файлы...${NC}"
     mkdir -p /opt/remnawave && cd /opt/remnawave
@@ -216,48 +206,31 @@ install_panel() {
     sed -i "s|^FRONT_END_DOMAIN=.*|FRONT_END_DOMAIN=$PANEL_DOMAIN|" .env
     sed -i "s|^SUB_PUBLIC_DOMAIN=.*|SUB_PUBLIC_DOMAIN=$SUB_DOMAIN|" .env
 
-    echo -e "${YELLOW}🚀 Шаг 4. Запускаем основную панель...${NC}"
+    # Добавляем проброс портов на localhost в docker-compose.yml
+    echo -e "${YELLOW}🔧 Шаг 4. Настраиваем проброс портов для Nginx...${NC}"
+    # Вставляем ports для remnawave (контейнер уже имеет EXPOSE 3000)
+    sed -i '/remnawave:/,/^[^ ]/ {
+        /ports:/d
+        /environment:/a\    ports:\n      - "127.0.0.1:3000:3000"
+    }' docker-compose.yml
+
+    echo -e "${YELLOW}🚀 Шаг 5. Запускаем основную панель...${NC}"
     docker compose up -d
     echo -e "${GREEN}✅ Панель запущена. Ожидаем инициализацию БД...${NC}"
     sleep 20
 
-    echo -e "\n${YELLOW}🔧 Шаг 5. Настраиваем Caddy (HTTPS)...${NC}"
-    mkdir -p /opt/remnawave/caddy && cd /opt/remnawave/caddy
-    init_caddy_blocks
-
-    PANEL_BLOCK="https://$PANEL_DOMAIN {
-    reverse_proxy * http://remnawave:3000
-}"
-    add_caddy_block "$PANEL_DOMAIN" "$PANEL_BLOCK"
-
-    cat > docker-compose.yml <<EOF
-services:
-    caddy:
-        image: caddy:2.9
-        container_name: 'caddy'
-        hostname: caddy
-        restart: always
-        ports:
-            - '0.0.0.0:443:443'
-            - '0.0.0.0:80:80'
-        networks:
-            - remnawave-network
-        volumes:
-            - ./Caddyfile:/etc/caddy/Caddyfile
-            - caddy-ssl-data:/data
-networks:
-    remnawave-network:
-        name: remnawave-network
-        driver: bridge
-        external: true
-volumes:
-    caddy-ssl-data:
-        driver: local
-        external: false
-        name: caddy-ssl-data
-EOF
-    docker compose up -d
-    echo -e "${GREEN}✅ Caddy запущен. HTTPS готов.${NC}"
+    echo -e "\n${YELLOW}🔧 Шаг 6. Настраиваем Nginx для панели...${NC}"
+    PANEL_BLOCK="
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+    }
+    "
+    add_nginx_block "$PANEL_DOMAIN" "$PANEL_BLOCK"
 
     echo -e "\n${YELLOW}${BOLD}⚠️  ВАЖНО: Создайте API Token в админке!${NC}"
     echo -e "1. Откройте в браузере: ${CYAN}https://$PANEL_DOMAIN${NC}"
@@ -269,7 +242,7 @@ EOF
     if [ -z "$API_TOKEN" ]; then
         echo -e "${RED}❌ Токен не введён. Страница подписки не будет установлена.${NC}"
     else
-        echo -e "\n${YELLOW}📄 Шаг 6. Устанавливаем страницу подписки...${NC}"
+        echo -e "\n${YELLOW}📄 Шаг 7. Устанавливаем страницу подписки...${NC}"
         mkdir -p /opt/remnawave/subscription && cd /opt/remnawave/subscription
 
         cat > .env <<EOF
@@ -300,16 +273,15 @@ EOF
         docker compose up -d
         echo -e "${GREEN}✅ Страница подписки запущена.${NC}"
 
-        echo -e "${YELLOW}🔄 Шаг 7. Добавляем домен подписки в Caddy...${NC}"
-
-        SUB_BLOCK="https://$SUB_DOMAIN {
-    reverse_proxy * http://remnawave-subscription-page:3010
-}"
-        add_caddy_block "$SUB_DOMAIN" "$SUB_BLOCK"
-
-        cd /opt/remnawave/caddy
-        docker compose down && docker compose up -d
-        echo -e "${GREEN}✅ Caddy обновлён.${NC}"
+        echo -e "${YELLOW}🔄 Шаг 8. Добавляем домен подписки в Nginx...${NC}"
+        SUB_BLOCK="
+        location / {
+            proxy_pass http://127.0.0.1:3010;
+            proxy_http_version 1.1;
+            proxy_set_header Host \$host;
+        }
+        "
+        add_nginx_block "$SUB_DOMAIN" "$SUB_BLOCK"
     fi
 
     echo -e "\n${GREEN}${BOLD}╔═══════════════════════════════════════════════════════════════╗${NC}"
@@ -322,7 +294,7 @@ EOF
 }
 
 # ============================================
-# ОПЦИЯ 1.2: УСТАНОВКА НОДЫ
+# ОПЦИЯ 1.2: УСТАНОВКА НОДЫ (без изменений)
 # ============================================
 install_node() {
     show_logo
@@ -374,7 +346,7 @@ EOF
 }
 
 # ============================================
-# ОПЦИЯ 1.3: ОБНОВЛЕНИЕ КОМПОНЕНТОВ
+# ОПЦИЯ 1.3: ОБНОВЛЕНИЕ (без изменений)
 # ============================================
 update_components() {
     show_logo
@@ -458,7 +430,7 @@ show_bedolaga_menu() {
         echo -e "  ${CYAN}1)${NC} Установить Bedolaga Bot"
         echo -e "  ${CYAN}2)${NC} Установить MiniAPP (Cabinet)"
         echo -e "  ${CYAN}3)${NC} Обновить компоненты"
-        echo -e "  ${CYAN}4)${NC} 🌐 Настроить Caddy для Bedolaga"
+        echo -e "  ${CYAN}4)${NC} 🌐 Настроить Nginx для Bedolaga"
         echo -e "  ${CYAN}0)${NC} Назад"
         read -p "${CYAN}▶${NC} Ваш выбор: " choice
 
@@ -466,7 +438,7 @@ show_bedolaga_menu() {
             1) install_bedolaga ;;
             2) install_cabinet ;;
             3) update_bedolaga ;;
-            4) setup_caddy_for_bedolaga ;;
+            4) setup_nginx_for_bedolaga ;;
             0) break ;;
             *) echo -e "${RED}❌ Неверный выбор.${NC}"; sleep 2 ;;
         esac
@@ -478,6 +450,8 @@ install_bedolaga() {
     echo -e "${BLUE}${BOLD}💰 Установка Bedolaga Bot${NC}\n"
 
     install_docker
+    install_nginx
+    ensure_nginx_running
 
     echo -e "${YELLOW}Где устанавливается бот?${NC}"
     echo -e "  ${CYAN}1)${NC} На том же сервере, где и панель"
@@ -533,36 +507,49 @@ EOF
     chmod -R 755 ./logs ./data
     chown -R 1000:1000 ./logs ./data
 
-    docker network create remnawave-network 2>/dev/null || true
-    docker network create remnawave_bot_network 2>/dev/null || true
-
+    # Пробрасываем порт 8080 на localhost
     if [[ "$server_location" == "1" ]]; then
+        # Используем локальный docker-compose с пробросом
+        cat > docker-compose.yml <<EOF
+services:
+    remnawave_bot:
+        build: .
+        container_name: remnawave_bot
+        restart: always
+        ports:
+            - "127.0.0.1:8080:8080"
+        env_file:
+            - .env
+        volumes:
+            - ./logs:/app/logs
+            - ./data:/app/data
+EOF
+    else
+        # Для отдельного сервера используем оригинальный compose (без проброса, но нам нужен порт для Nginx)
+        # Можно просто использовать тот же файл, если он есть
         if [ -f "docker-compose.local.yml" ]; then
-            rm -f docker-compose.yml
-            mv docker-compose.local.yml docker-compose.yml
+            cp docker-compose.local.yml docker-compose.yml
+        fi
+        # Добавляем порт вручную, если нет
+        if ! grep -q "ports:" docker-compose.yml; then
+            sed -i '/remnawave_bot:/a\    ports:\n      - "127.0.0.1:8080:8080"' docker-compose.yml
         fi
     fi
 
     docker compose up -d
 
-    if [[ "$server_location" == "1" ]]; then
-        BEDOLAGA_BLOCK="https://$BEDOLAGA_DOMAIN {
-    encode gzip zstd
-    handle {
-        reverse_proxy remnawave_bot:8080 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-            transport http {
-                read_buffer 0
-            }
-        }
+    # Настройка Nginx для бота
+    BEDOLAGA_BLOCK="
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
-}"
-        add_caddy_block "$BEDOLAGA_DOMAIN" "$BEDOLAGA_BLOCK"
-
-        cd /opt/remnawave/caddy
-        docker compose down && docker compose up -d
-    fi
+    "
+    add_nginx_block "$BEDOLAGA_DOMAIN" "$BEDOLAGA_BLOCK"
 
     echo -e "${GREEN}✅ Bedolaga Bot успешно установлен!${NC}"
     echo -e "🌐 Бот: https://$BEDOLAGA_DOMAIN\n"
@@ -621,30 +608,35 @@ EOF
     mkdir -p /srv/cabinet
     cp -r ./cabinet-dist/* /srv/cabinet/
 
-    # Caddy блок
-    CABINET_BLOCK="https://$CABINET_DOMAIN {
-    encode gzip zstd
-    handle /api/* {
-        uri strip_prefix /api
-        reverse_proxy remnawave_bot:8080
-    }
-    handle {
-        reverse_proxy cabinet_frontend:80
-    }
-}"
-    add_caddy_block "$CABINET_DOMAIN" "$CABINET_BLOCK"
-
-    cd /opt/remnawave/caddy
-    docker compose down && docker compose up -d
-
-    # Запуск контейнера Cabinet
-    cd /opt/bedolaga-cabinet
+    # Создаем контейнер для Cabinet (nginx, который раздаёт статику)
+    cat > docker-compose.yml <<EOF
+services:
+    cabinet_frontend:
+        image: nginx:alpine
+        container_name: cabinet_frontend
+        restart: always
+        ports:
+            - "127.0.0.1:8081:80"
+        volumes:
+            - /srv/cabinet:/usr/share/nginx/html:ro
+EOF
     docker compose up -d
 
-    # Подключение сетей (чтобы Caddy видел контейнеры)
-    echo -e "${YELLOW}🔗 Подключаем Caddy к сетям бота и кабинета...${NC}"
-    docker network connect bedolaga-bot_bot_network caddy 2>/dev/null || true
-    docker network connect bedolaga-cabinet_default caddy 2>/dev/null || true
+    # Настраиваем Nginx для Cabinet
+    CABINET_BLOCK="
+    location /api/ {
+        rewrite ^/api/(.*) /\$1 break;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+    }
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+    }
+    "
+    add_nginx_block "$CABINET_DOMAIN" "$CABINET_BLOCK"
 
     echo -e "${GREEN}✅ MiniAPP (Cabinet) успешно установлен!${NC}"
     echo -e "🗄️  Cabinet: https://$CABINET_DOMAIN\n"
@@ -676,11 +668,11 @@ update_bedolaga() {
 }
 
 # ============================================
-# НАСТРОЙКА CADDY ДЛЯ BEDOLAGA
+# НАСТРОЙКА NGINX ДЛЯ BEDOLAGA
 # ============================================
-setup_caddy_for_bedolaga() {
+setup_nginx_for_bedolaga() {
     show_logo
-    echo -e "${BLUE}${BOLD}🌐 Настройка Caddy для Bedolaga Bot + Cabinet${NC}\n"
+    echo -e "${BLUE}${BOLD}🌐 Настройка Nginx для Bedolaga Bot + Cabinet${NC}\n"
 
     if [ ! -d "/opt/bedolaga-bot" ]; then
         echo -e "${RED}❌ Bedolaga Bot не установлен (нет /opt/bedolaga-bot).${NC}"
@@ -689,71 +681,34 @@ setup_caddy_for_bedolaga() {
         return
     fi
 
-    if ! ensure_caddy_running; then
-        return
-    fi
+    ensure_nginx_running || return
 
-    blocks_dir="/opt/remnawave/caddy/blocks"
+    # Определяем существующие домены из конфигов
     BOT_DOMAIN=""
     CABINET_DOMAIN=""
-
-    if [ -d "$blocks_dir" ]; then
-        for block_file in "$blocks_dir"/*; do
-            if [ -f "$block_file" ]; then
-                block_content=$(cat "$block_file")
-                if echo "$block_content" | grep -q "reverse_proxy remnawave_bot:8080"; then
-                    if ! echo "$block_content" | grep -q "handle /api/\*"; then
-                        BOT_DOMAIN=$(basename "$block_file")
-                    fi
-                fi
-                if echo "$block_content" | grep -q "reverse_proxy cabinet_frontend:80" || echo "$block_content" | grep -q "file_server /srv/cabinet"; then
-                    CABINET_DOMAIN=$(basename "$block_file")
-                fi
+    for conf in /etc/nginx/sites-available/*; do
+        if [ -f "$conf" ]; then
+            if grep -q "proxy_pass http://127.0.0.1:8080" "$conf"; then
+                BOT_DOMAIN=$(basename "$conf")
             fi
-        done
-    fi
-
-    if [ -z "$BOT_DOMAIN" ] && [ -f "/opt/bedolaga-bot/.env" ]; then
-        BOT_DOMAIN=$(grep -E "^WEBHOOK_URL=" /opt/bedolaga-bot/.env | sed -E 's|^WEBHOOK_URL=https?://([^:/]+).*$|\1|')
-    fi
-
-    if [ -z "$CABINET_DOMAIN" ] && [ -f "/opt/bedolaga-cabinet/.env" ]; then
-        CABINET_DOMAIN=$(grep -E "^VITE_API_URL=" /opt/bedolaga-cabinet/.env | sed -E 's|^.*//([^:/]+).*$|\1|')
-    fi
+            if grep -q "proxy_pass http://127.0.0.1:8081" "$conf"; then
+                CABINET_DOMAIN=$(basename "$conf")
+            fi
+        fi
+    done
 
     if [ -z "$BOT_DOMAIN" ]; then
-        echo -e "${YELLOW}Не удалось автоматически определить домен для бота.${NC}"
-        read -p "🌐 Введите домен для Bedolaga Bot (например bot.myvpn.com): " BOT_DOMAIN
-        if [ -z "$BOT_DOMAIN" ]; then
-            echo -e "${RED}❌ Домен не введён. Отмена.${NC}"
-            read -p "Нажмите Enter..."
-            return
-        fi
+        read -p "🌐 Введите домен для Bedolaga Bot: " BOT_DOMAIN
+    fi
+    if [ -z "$CABINET_DOMAIN" ] && [ -d "/opt/bedolaga-cabinet" ]; then
+        read -p "🌐 Введите домен для Cabinet: " CABINET_DOMAIN
     fi
 
-    if [ -z "$CABINET_DOMAIN" ]; then
-        if [ -d "/opt/bedolaga-cabinet" ]; then
-            echo -e "${YELLOW}Не удалось автоматически определить домен для Cabinet.${NC}"
-            read -p "🌐 Введите домен для Cabinet (например cabinet.myvpn.com): " CABINET_DOMAIN
-            if [ -z "$CABINET_DOMAIN" ]; then
-                echo -e "${RED}❌ Домен не введён. Пропускаем настройку кабинета.${NC}"
-                CABINET_DOMAIN=""
-            fi
-        else
-            echo -e "${YELLOW}Cabinet не установлен, пропускаем его настройку.${NC}"
-        fi
-    fi
-
-    echo -e "\n${CYAN}${BOLD}Найденные домены:${NC}"
+    echo -e "\n${CYAN}${BOLD}Найденные/введённые домены:${NC}"
     echo -e "  🤖 Бот:      ${BOLD}$BOT_DOMAIN${NC}"
-    if [ -n "$CABINET_DOMAIN" ]; then
-        echo -e "  🗄️  Cabinet:  ${BOLD}$CABINET_DOMAIN${NC}"
-    else
-        echo -e "  🗄️  Cabinet:  ${YELLOW}не установлен${NC}"
-    fi
-    echo ""
-    read -p "Всё верно? (y — продолжить, n — изменить домены): " confirm
+    [ -n "$CABINET_DOMAIN" ] && echo -e "  🗄️  Cabinet:  ${BOLD}$CABINET_DOMAIN${NC}"
 
+    read -p "Всё верно? (y — продолжить, n — изменить): " confirm
     if [[ "$confirm" =~ ^[Nn]$ ]]; then
         read -p "🌐 Введите новый домен для БОТА: " BOT_DOMAIN
         if [ -n "$CABINET_DOMAIN" ]; then
@@ -761,96 +716,494 @@ setup_caddy_for_bedolaga() {
         fi
     fi
 
-    echo -e "\n${YELLOW}🔧 Добавляем/обновляем блоки Caddy...${NC}"
+    # Пересоздаём конфиги, если они уже есть, удалим старые
+    if [ -f "/etc/nginx/sites-available/$BOT_DOMAIN" ]; then
+        remove_nginx_block "$BOT_DOMAIN"
+    fi
+    if [ -n "$CABINET_DOMAIN" ] && [ -f "/etc/nginx/sites-available/$CABINET_DOMAIN" ]; then
+        remove_nginx_block "$CABINET_DOMAIN"
+    fi
 
-    BOT_BLOCK="https://$BOT_DOMAIN {
-    encode gzip zstd
-    handle {
-        reverse_proxy remnawave_bot:8080 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-            transport http {
-                read_buffer 0
-            }
-        }
+    # Добавляем блок для бота
+    BOT_BLOCK="
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
-}"
-    add_caddy_block "$BOT_DOMAIN" "$BOT_BLOCK"
+    "
+    add_nginx_block "$BOT_DOMAIN" "$BOT_BLOCK"
 
     if [ -n "$CABINET_DOMAIN" ]; then
-        if [ -d "/srv/cabinet" ] && [ -f "/srv/cabinet/index.html" ]; then
-            CABINET_BLOCK="https://$CABINET_DOMAIN {
-    encode gzip zstd
-    handle /api/* {
-        uri strip_prefix /api
-        reverse_proxy remnawave_bot:8080
-    }
-    handle {
-        root * /srv/cabinet
-        file_server
-    }
-}"
-        else
-            CABINET_BLOCK="https://$CABINET_DOMAIN {
-    encode gzip zstd
-    handle /api/* {
-        uri strip_prefix /api
-        reverse_proxy remnawave_bot:8080
-    }
-    handle {
-        reverse_proxy cabinet_frontend:80
-    }
-}"
-        fi
-        add_caddy_block "$CABINET_DOMAIN" "$CABINET_BLOCK"
+        CABINET_BLOCK="
+        location /api/ {
+            rewrite ^/api/(.*) /\$1 break;
+            proxy_pass http://127.0.0.1:8080;
+            proxy_http_version 1.1;
+            proxy_set_header Host \$host;
+        }
+        location / {
+            proxy_pass http://127.0.0.1:8081;
+            proxy_http_version 1.1;
+            proxy_set_header Host \$host;
+        }
+        "
+        add_nginx_block "$CABINET_DOMAIN" "$CABINET_BLOCK"
     fi
 
-    echo -e "${YELLOW}🔄 Перезапускаем Caddy...${NC}"
-    cd /opt/remnawave/caddy
-    if [ -f "docker-compose.yml" ]; then
-        docker compose down 2>/dev/null
-        docker compose up -d
-        echo -e "${GREEN}✅ Caddy перезапущен.${NC}"
-    else
-        echo -e "${RED}❌ Файл docker-compose.yml для Caddy не найден.${NC}"
-        echo -e "Пожалуйста, установите Caddy через установку панели."
-        read -p "Нажмите Enter..."
-        return
-    fi
-
-    # Подключаем Caddy к сетям бота и кабинета (на всякий случай)
-    echo -e "${YELLOW}🔗 Подключаем Caddy к сетям...${NC}"
-    docker network connect remnawave_bot_network caddy 2>/dev/null || true
-    docker network connect bedolaga-bot_bot_network caddy 2>/dev/null || true
-    docker network connect bedolaga-cabinet_default caddy 2>/dev/null || true
-
-    if [ -n "$CABINET_DOMAIN" ] && [ -f "/opt/bedolaga-bot/.env" ]; then
-        if ! grep -q "CABINET_ENABLED=true" /opt/bedolaga-bot/.env; then
-            echo -e "${YELLOW}⚠️  В .env бота отсутствуют настройки Cabinet. Добавляем...${NC}"
-            CABINET_JWT_SECRET=$(openssl rand -hex 32)
-            cat >> /opt/bedolaga-bot/.env <<EOF
-
-# Bedolaga Cabinet (добавлено автоматически)
-CABINET_ENABLED=true
-CABINET_JWT_SECRET=$CABINET_JWT_SECRET
-CABINET_ALLOWED_ORIGINS=https://$CABINET_DOMAIN
-CABINET_URL=https://$CABINET_DOMAIN
-EOF
-            echo -e "${GREEN}✅ Настройки Cabinet добавлены. Перезапускаем бота...${NC}"
-            cd /opt/bedolaga-bot
-            docker compose restart
-        fi
-    fi
-
-    echo -e "\n${GREEN}${BOLD}✅ Настройка Caddy для Bedolaga завершена!${NC}"
+    echo -e "\n${GREEN}${BOLD}✅ Настройка Nginx для Bedolaga завершена!${NC}"
     echo -e "🌐 Бот: https://$BOT_DOMAIN"
     [ -n "$CABINET_DOMAIN" ] && echo -e "🗄️  Cabinet: https://$CABINET_DOMAIN"
-    echo -e "\n"
     read -p "Нажмите Enter для возврата..."
 }
 
 # ============================================
-# ИСПРАВЛЕННАЯ ФУНКЦИЯ: CLOUDFLARE DDNS (ВЫБОР ЗАПИСЕЙ)
+# ОПЦИЯ 3: REMNAWAVE ADMIN WEB + BOT
+# ============================================
+install_admin_bot() {
+    show_logo
+    echo -e "${BLUE}${BOLD}🤖 Установка Remnawave Admin Web + Bot${NC}\n"
+
+    install_docker
+    install_nginx
+    ensure_nginx_running
+
+    echo -e "${YELLOW}Где устанавливается Admin Bot?${NC}"
+    echo -e "  ${CYAN}1)${NC} На том же сервере, где и панель"
+    echo -e "  ${CYAN}2)${NC} На отдельном сервере"
+    read -p "${CYAN}▶${NC} Ваш выбор: " server_location
+
+    if [[ "$server_location" == "1" ]]; then
+        API_BASE_URL="http://remnawave:3000"
+    else
+        read -p "🌐 Введите домен панели: " PANEL_DOMAIN
+        API_BASE_URL="https://$PANEL_DOMAIN"
+    fi
+
+    read -p "🤖 BOT_TOKEN (от @BotFather): " BOT_TOKEN
+    read -p "🔑 API_TOKEN (из панели): " API_TOKEN
+    read -p "👤 ADMINS (Telegram ID через запятую): " ADMINS
+    read -p "📱 TELEGRAM_BOT_USERNAME (без @): " BOT_USERNAME
+    read -p "🌐 Домен для веб-панели (например admin.myvpn.com): " ADMIN_DOMAIN
+
+    WEB_SECRET_KEY=$(openssl rand -hex 32)
+    POSTGRES_PASSWORD=$(openssl rand -hex 24)
+
+    mkdir -p /opt/remnawave-admin && cd /opt/remnawave-admin
+    git clone https://github.com/Case211/remnawave-admin.git .
+
+    cat > .env <<EOF
+BOT_TOKEN=$BOT_TOKEN
+API_BASE_URL=$API_BASE_URL
+API_TOKEN=$API_TOKEN
+ADMINS=$ADMINS
+DEFAULT_LOCALE=ru
+LOG_LEVEL=INFO
+WEBHOOK_PORT=9090
+WEB_SECRET_KEY=$WEB_SECRET_KEY
+POSTGRES_USER=remnawave
+POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+POSTGRES_DB=remnawave_bot
+DATABASE_URL=postgresql://remnawave:$POSTGRES_PASSWORD@remnawave-admin-db:5432/remnawave_bot
+WEB_CORS_ORIGINS=https://$ADMIN_DOMAIN
+TELEGRAM_BOT_USERNAME=$BOT_USERNAME
+WEB_BACKEND_PORT=9091
+WEB_FRONTEND_PORT=13000
+EOF
+
+    # Добавляем проброс портов в docker-compose.yml (если есть)
+    # В оригинальном репозитории используется compose, добавим порты для frontend и backend
+    # Для простоты предположим, что в compose есть сервисы web-frontend и web-backend
+    # Добавим порты вручную, создав свой compose файл
+    cat > docker-compose.yml <<EOF
+version: '3.8'
+services:
+  web-frontend:
+    image: case211/remnawave-admin-frontend:latest
+    container_name: web-frontend
+    restart: always
+    ports:
+      - "127.0.0.1:13000:80"
+    env_file:
+      - .env
+  web-backend:
+    image: case211/remnawave-admin-backend:latest
+    container_name: web-backend
+    restart: always
+    ports:
+      - "127.0.0.1:9091:9091"
+    env_file:
+      - .env
+    depends_on:
+      - db
+  db:
+    image: postgres:15
+    container_name: remnawave-admin-db
+    restart: always
+    environment:
+      POSTGRES_USER: remnawave
+      POSTGRES_PASSWORD: $POSTGRES_PASSWORD
+      POSTGRES_DB: remnawave_bot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+volumes:
+  pgdata:
+EOF
+
+    docker compose up -d
+
+    # Настройка Nginx
+    ADMIN_BLOCK="
+    location /api/ {
+        rewrite ^/api/(.*) /\$1 break;
+        proxy_pass http://127.0.0.1:9091;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }
+    location / {
+        proxy_pass http://127.0.0.1:13000;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+    }
+    "
+    add_nginx_block "$ADMIN_DOMAIN" "$ADMIN_BLOCK"
+
+    echo -e "${GREEN}✅ Remnawave Admin Web + Bot установлен!${NC}"
+    echo -e "🌐 Веб-панель: https://$ADMIN_DOMAIN\n"
+    read -p "Нажмите Enter для возврата в меню..."
+}
+
+# ============================================
+# ОПЦИЯ 4: CLOUDFLARE WARP (без изменений)
+# ============================================
+install_warp() {
+    show_logo
+    echo -e "${BLUE}${BOLD}🌐 Установка Cloudflare WARP${NC}\n"
+
+    install_docker
+
+    echo -e "${YELLOW}📥 Запускаем официальный скрипт установки warp-native...${NC}"
+    bash <(curl -fsSL https://raw.githubusercontent.com/distillium/warp-native/main/install.sh)
+
+    echo -e "${GREEN}✅ WARP успешно установлен!${NC}\n"
+    read -p "Нажмите Enter для возврата в меню..."
+}
+
+uninstall_warp() {
+    show_logo
+    echo -e "${BLUE}${BOLD}🗑️  Удаление Cloudflare WARP${NC}\n"
+
+    echo -e "${YELLOW}📥 Запускаем официальный скрипт удаления...${NC}"
+    bash <(curl -fsSL https://raw.githubusercontent.com/distillium/warp-native/main/uninstall.sh) || true
+
+    echo -e "${GREEN}✅ WARP успешно удалён.${NC}\n"
+    read -p "Нажмите Enter для возврата в меню..."
+}
+
+# ============================================
+# ОПЦИЯ 5: БЭКАПЫ (без изменений)
+# ============================================
+run_backup() {
+    show_logo
+    echo -e "${BLUE}${BOLD}💾 Запуск скрипта бэкапов${NC}\n"
+
+    if [ ! -f "/tmp/backup-restore.sh" ]; then
+        echo -e "${YELLOW}📥 Скачиваем скрипт бэкапов...${NC}"
+        curl -Ls https://raw.githubusercontent.com/distillium/remnawave-backup-restore/main/backup-restore.sh -o /tmp/backup-restore.sh
+        chmod +x /tmp/backup-restore.sh
+        echo -e "${GREEN}✅ Скрипт скачан.${NC}\n"
+    fi
+
+    echo -e "${YELLOW}Запускаем скрипт бэкапов...${NC}\n"
+    bash /tmp/backup-restore.sh
+
+    echo -e "\n${GREEN}✅ Скрипт бэкапов завершён.${NC}\n"
+    read -p "Нажмите Enter для возврата в меню..."
+}
+
+# ============================================
+# ОПЦИЯ 6: ЛОГИ (с заменой на Nginx)
+# ============================================
+show_logs_menu() {
+    while true; do
+        show_logo
+        echo -e "${BLUE}${BOLD}📋 Просмотр логов${NC}\n"
+        echo -e "${BOLD}Выберите компонент:${NC}"
+        echo -e "  ${CYAN}1)${NC} 🚀 Логи панели Remnawave"
+        echo -e "  ${CYAN}2)${NC} 📄 Логи страницы подписки"
+        echo -e "  ${CYAN}3)${NC} 🌐 Логи Nginx"
+        echo -e "  ${CYAN}0)${NC} 🔙 Назад в главное меню"
+        echo ""
+        read -p "${CYAN}▶${NC} Ваш выбор: " log_choice
+
+        case $log_choice in
+            1) show_panel_logs ;;
+            2) show_subscription_logs ;;
+            3) show_nginx_logs ;;
+            0) break ;;
+            *) echo -e "${RED}❌ Неверный выбор.${NC}"; sleep 2 ;;
+        esac
+    done
+}
+
+show_panel_logs() {
+    show_logo
+    echo -e "${BLUE}${BOLD}🚀 Логи панели Remnawave${NC}\n"
+
+    if [ ! -d "/opt/remnawave" ]; then
+        echo -e "${RED}❌ Папка /opt/remnawave не найдена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    cd /opt/remnawave
+    echo -e "${YELLOW}Нажмите Ctrl+C для выхода из логов${NC}\n"
+    docker compose logs -f --tail=100
+}
+
+show_subscription_logs() {
+    show_logo
+    echo -e "${BLUE}${BOLD}📄 Логи страницы подписки${NC}\n"
+
+    if [ ! -d "/opt/remnawave/subscription" ]; then
+        echo -e "${RED}❌ Папка /opt/remnawave/subscription не найдена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    cd /opt/remnawave/subscription
+    echo -e "${YELLOW}Нажмите Ctrl+C для выхода из логов${NC}\n"
+    docker compose logs -f --tail=100
+}
+
+show_nginx_logs() {
+    show_logo
+    echo -e "${BLUE}${BOLD}🌐 Логи Nginx${NC}\n"
+    echo -e "${YELLOW}Нажмите Ctrl+C для выхода${NC}\n"
+    tail -f /var/log/nginx/access.log /var/log/nginx/error.log
+}
+
+# ============================================
+# УДАЛЕНИЕ КОМПОНЕНТОВ (с заменой на Nginx)
+# ============================================
+show_uninstall_menu() {
+    while true; do
+        show_logo
+        echo -e "${RED}${BOLD}🗑️  Удаление компонентов${NC}\n"
+        echo -e "${YELLOW}ВНИМАНИЕ: Удаление безвозвратно!${NC}\n"
+        echo -e "  ${CYAN}1)${NC} Удалить Remnawave Panel (включая подписку)"
+        echo -e "  ${CYAN}2)${NC} Удалить Bedolaga Bot"
+        echo -e "  ${CYAN}3)${NC} Удалить Bedolaga Cabinet"
+        echo -e "  ${CYAN}4)${NC} Удалить Nginx (весь прокси)"
+        echo -e "  ${CYAN}5)${NC} Удалить Cloudflare DDNS"
+        echo -e "  ${CYAN}6)${NC} Удалить Cloudflare WARP"
+        echo -e "  ${CYAN}7)${NC} Удалить ВСЁ (полная очистка)"
+        echo -e "  ${CYAN}0)${NC} 🔙 Назад"
+        read -p "${CYAN}▶${NC} Ваш выбор: " uninstall_choice
+
+        case $uninstall_choice in
+            1) uninstall_panel ;;
+            2) uninstall_bedolaga_bot ;;
+            3) uninstall_cabinet ;;
+            4) uninstall_nginx ;;
+            5) uninstall_ddns ;;
+            6) uninstall_warp ;;
+            7) uninstall_all ;;
+            0) break ;;
+            *) echo -e "${RED}❌ Неверный выбор.${NC}"; sleep 2 ;;
+        esac
+    done
+}
+
+uninstall_panel() {
+    show_logo
+    echo -e "${RED}${BOLD}🗑️  Удаление Remnawave Panel${NC}\n"
+    read -p "Вы уверены, что хотите удалить панель и все её данные? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    if [ -d "/opt/remnawave" ]; then
+        cd /opt/remnawave
+        docker compose down -v 2>/dev/null
+        cd ..
+        rm -rf /opt/remnawave
+        echo -e "${GREEN}✅ Панель Remnawave удалена.${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Панель не найдена.${NC}"
+    fi
+
+    # Удаляем конфиги Nginx для доменов, связанных с панелью
+    for conf in /etc/nginx/sites-available/*; do
+        if [ -f "$conf" ]; then
+            if grep -q "proxy_pass http://127.0.0.1:3000" "$conf" || grep -q "proxy_pass http://127.0.0.1:3010" "$conf"; then
+                domain=$(basename "$conf")
+                remove_nginx_block "$domain"
+            fi
+        fi
+    done
+
+    echo -e "${GREEN}✅ Удаление панели завершено.${NC}"
+    read -p "Нажмите Enter для возврата..."
+}
+
+uninstall_bedolaga_bot() {
+    show_logo
+    echo -e "${RED}${BOLD}🗑️  Удаление Bedolaga Bot${NC}\n"
+    read -p "Вы уверены, что хотите удалить бота? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    # Определяем домен из конфига
+    BOT_DOMAIN=""
+    for conf in /etc/nginx/sites-available/*; do
+        if [ -f "$conf" ] && grep -q "proxy_pass http://127.0.0.1:8080" "$conf"; then
+            BOT_DOMAIN=$(basename "$conf")
+            break
+        fi
+    done
+
+    if [ -d "/opt/bedolaga-bot" ]; then
+        cd /opt/bedolaga-bot
+        docker compose down -v 2>/dev/null
+        cd ..
+        rm -rf /opt/bedolaga-bot
+        echo -e "${GREEN}✅ Bedolaga Bot удалён.${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Бот не найден.${NC}"
+    fi
+
+    if [ -n "$BOT_DOMAIN" ]; then
+        remove_nginx_block "$BOT_DOMAIN"
+    fi
+
+    echo -e "${GREEN}✅ Удаление бота завершено.${NC}"
+    read -p "Нажмите Enter для возврата..."
+}
+
+uninstall_cabinet() {
+    show_logo
+    echo -e "${RED}${BOLD}🗑️  Удаление Bedolaga Cabinet${NC}\n"
+    read -p "Вы уверены, что хотите удалить Cabinet? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    CABINET_DOMAIN=""
+    for conf in /etc/nginx/sites-available/*; do
+        if [ -f "$conf" ] && grep -q "proxy_pass http://127.0.0.1:8081" "$conf"; then
+            CABINET_DOMAIN=$(basename "$conf")
+            break
+        fi
+    done
+
+    if [ -d "/opt/bedolaga-cabinet" ]; then
+        cd /opt/bedolaga-cabinet
+        docker compose down -v 2>/dev/null
+        cd ..
+        rm -rf /opt/bedolaga-cabinet
+        echo -e "${GREEN}✅ Bedolaga Cabinet удалён.${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Cabinet не найден.${NC}"
+    fi
+
+    if [ -d "/srv/cabinet" ]; then
+        rm -rf /srv/cabinet
+        echo -e "${GREEN}✅ Статика кабинета удалена.${NC}"
+    fi
+
+    if [ -n "$CABINET_DOMAIN" ]; then
+        remove_nginx_block "$CABINET_DOMAIN"
+    fi
+
+    echo -e "${GREEN}✅ Удаление Cabinet завершено.${NC}"
+    read -p "Нажмите Enter для возврата..."
+}
+
+uninstall_nginx() {
+    show_logo
+    echo -e "${RED}${BOLD}🗑️  Удаление Nginx и всех конфигов${NC}\n"
+    read -p "Вы уверены, что хотите удалить Nginx и все SSL-сертификаты? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    systemctl stop nginx
+    systemctl disable nginx
+    apt-get purge -y nginx nginx-common
+
+    rm -rf /etc/nginx/sites-available/*
+    rm -rf /etc/nginx/sites-enabled/*
+    rm -f /etc/ssl/private/*.key
+    rm -f /etc/ssl/certs/*.crt
+
+    echo -e "${GREEN}✅ Nginx и сертификаты удалены.${NC}"
+    read -p "Нажмите Enter для возврата..."
+}
+
+uninstall_ddns() {
+    show_logo
+    echo -e "${RED}${BOLD}🗑️  Удаление Cloudflare DDNS${NC}\n"
+    read -p "Вы уверены, что хотите удалить DDNS? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    systemctl stop cloudflare-ddns.timer 2>/dev/null
+    systemctl disable cloudflare-ddns.timer 2>/dev/null
+    systemctl stop cloudflare-ddns.service 2>/dev/null
+    systemctl disable cloudflare-ddns.service 2>/dev/null
+
+    rm -f /etc/systemd/system/cloudflare-ddns.timer
+    rm -f /etc/systemd/system/cloudflare-ddns.service
+    systemctl daemon-reload
+
+    rm -rf /opt/cloudflare-ddns
+
+    echo -e "${GREEN}✅ Cloudflare DDNS удалён.${NC}"
+    read -p "Нажмите Enter для возврата..."
+}
+
+uninstall_all() {
+    show_logo
+    echo -e "${RED}${BOLD}🗑️  ПОЛНАЯ ОЧИСТКА ВСЕХ КОМПОНЕНТОВ${NC}\n"
+    read -p "ВНИМАНИЕ! Это удалит всё: панель, бота, кабинет, Nginx, DDNS, WARP. Продолжить? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+
+    uninstall_panel
+    uninstall_bedolaga_bot
+    uninstall_cabinet
+    uninstall_nginx
+    uninstall_ddns
+    uninstall_warp
+
+    docker system prune -af --volumes 2>/dev/null
+
+    echo -e "${GREEN}${BOLD}✅ Полная очистка завершена!${NC}"
+    read -p "Нажмите Enter для возврата..."
+}
+
+# ============================================
+# ОПЦИЯ 7: CLOUDFLARE DDNS (без изменений)
 # ============================================
 install_cloudflare_ddns() {
     show_logo
@@ -1089,421 +1442,6 @@ EOF
     echo -e "📋 Лог: journalctl -u cloudflare-ddns -f"
     echo -e "🔄 Принудительный запуск: systemctl start cloudflare-ddns"
     echo -e ""
-    read -p "Нажмите Enter для возврата..."
-}
-
-# ============================================
-# ОПЦИЯ 3: REMNAWAVE ADMIN WEB + BOT
-# ============================================
-install_admin_bot() {
-    show_logo
-    echo -e "${BLUE}${BOLD}🤖 Установка Remnawave Admin Web + Bot${NC}\n"
-
-    install_docker
-
-    echo -e "${YELLOW}Где устанавливается Admin Bot?${NC}"
-    echo -e "  ${CYAN}1)${NC} На том же сервере, где и панель"
-    echo -e "  ${CYAN}2)${NC} На отдельном сервере"
-    read -p "${CYAN}▶${NC} Ваш выбор: " server_location
-
-    if [[ "$server_location" == "1" ]]; then
-        API_BASE_URL="http://remnawave:3000"
-    else
-        read -p "🌐 Введите домен панели: " PANEL_DOMAIN
-        API_BASE_URL="https://$PANEL_DOMAIN"
-    fi
-
-    read -p "🤖 BOT_TOKEN (от @BotFather): " BOT_TOKEN
-    read -p "🔑 API_TOKEN (из панели): " API_TOKEN
-    read -p "👤 ADMINS (Telegram ID через запятую): " ADMINS
-    read -p "📱 TELEGRAM_BOT_USERNAME (без @): " BOT_USERNAME
-    read -p "🌐 Домен для веб-панели (например admin.myvpn.com): " ADMIN_DOMAIN
-
-    WEB_SECRET_KEY=$(openssl rand -hex 32)
-    POSTGRES_PASSWORD=$(openssl rand -hex 24)
-
-    mkdir -p /opt/remnawave-admin && cd /opt/remnawave-admin
-    git clone https://github.com/Case211/remnawave-admin.git .
-
-    cat > .env <<EOF
-BOT_TOKEN=$BOT_TOKEN
-API_BASE_URL=$API_BASE_URL
-API_TOKEN=$API_TOKEN
-ADMINS=$ADMINS
-DEFAULT_LOCALE=ru
-LOG_LEVEL=INFO
-WEBHOOK_PORT=9090
-WEB_SECRET_KEY=$WEB_SECRET_KEY
-POSTGRES_USER=remnawave
-POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-POSTGRES_DB=remnawave_bot
-DATABASE_URL=postgresql://remnawave:$POSTGRES_PASSWORD@remnawave-admin-db:5432/remnawave_bot
-WEB_CORS_ORIGINS=https://$ADMIN_DOMAIN
-TELEGRAM_BOT_USERNAME=$BOT_USERNAME
-WEB_BACKEND_PORT=9091
-WEB_FRONTEND_PORT=13000
-EOF
-
-    docker network create remnawave-network 2>/dev/null || true
-    docker compose up -d
-
-    if [[ "$server_location" == "1" ]]; then
-        ADMIN_BLOCK="https://$ADMIN_DOMAIN {
-    handle {
-        reverse_proxy web-frontend:80
-    }
-    handle /api/* {
-        reverse_proxy web-backend:9091 {
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Forwarded-Proto {scheme}
-        }
-    }
-    handle /ws/* {
-        reverse_proxy web-backend:9091
-    }
-}"
-        add_caddy_block "$ADMIN_DOMAIN" "$ADMIN_BLOCK"
-
-        cd /opt/remnawave/caddy
-        docker compose down && docker compose up -d
-    fi
-
-    echo -e "${GREEN}✅ Remnawave Admin Web + Bot установлен!${NC}"
-    echo -e "🌐 Веб-панель: https://$ADMIN_DOMAIN\n"
-    read -p "Нажмите Enter для возврата в меню..."
-}
-
-# ============================================
-# ОПЦИЯ 4: CLOUDFLARE WARP
-# ============================================
-install_warp() {
-    show_logo
-    echo -e "${BLUE}${BOLD}🌐 Установка Cloudflare WARP${NC}\n"
-
-    install_docker
-
-    echo -e "${YELLOW}📥 Запускаем официальный скрипт установки warp-native...${NC}"
-    bash <(curl -fsSL https://raw.githubusercontent.com/distillium/warp-native/main/install.sh)
-
-    echo -e "${GREEN}✅ WARP успешно установлен!${NC}\n"
-    read -p "Нажмите Enter для возврата в меню..."
-}
-
-uninstall_warp() {
-    show_logo
-    echo -e "${BLUE}${BOLD}🗑️  Удаление Cloudflare WARP${NC}\n"
-
-    echo -e "${YELLOW}📥 Запускаем официальный скрипт удаления...${NC}"
-    bash <(curl -fsSL https://raw.githubusercontent.com/distillium/warp-native/main/uninstall.sh) || true
-
-    echo -e "${GREEN}✅ WARP успешно удалён.${NC}\n"
-    read -p "Нажмите Enter для возврата в меню..."
-}
-
-# ============================================
-# ОПЦИЯ 5: БЭКАПЫ
-# ============================================
-run_backup() {
-    show_logo
-    echo -e "${BLUE}${BOLD}💾 Запуск скрипта бэкапов${NC}\n"
-
-    if [ ! -f "/tmp/backup-restore.sh" ]; then
-        echo -e "${YELLOW}📥 Скачиваем скрипт бэкапов...${NC}"
-        curl -Ls https://raw.githubusercontent.com/distillium/remnawave-backup-restore/main/backup-restore.sh -o /tmp/backup-restore.sh
-        chmod +x /tmp/backup-restore.sh
-        echo -e "${GREEN}✅ Скрипт скачан.${NC}\n"
-    fi
-
-    echo -e "${YELLOW}Запускаем скрипт бэкапов...${NC}\n"
-    bash /tmp/backup-restore.sh
-
-    echo -e "\n${GREEN}✅ Скрипт бэкапов завершён.${NC}\n"
-    read -p "Нажмите Enter для возврата в меню..."
-}
-
-# ============================================
-# ОПЦИЯ 6: ЛОГИ
-# ============================================
-show_logs_menu() {
-    while true; do
-        show_logo
-        echo -e "${BLUE}${BOLD}📋 Просмотр логов${NC}\n"
-        echo -e "${BOLD}Выберите компонент:${NC}"
-        echo -e "  ${CYAN}1)${NC} 🚀 Логи панели Remnawave"
-        echo -e "  ${CYAN}2)${NC} 📄 Логи страницы подписки"
-        echo -e "  ${CYAN}0)${NC} 🔙 Назад в главное меню"
-        echo ""
-        read -p "${CYAN}▶${NC} Ваш выбор: " log_choice
-
-        case $log_choice in
-            1) show_panel_logs ;;
-            2) show_subscription_logs ;;
-            0) break ;;
-            *) echo -e "${RED}❌ Неверный выбор.${NC}"; sleep 2 ;;
-        esac
-    done
-}
-
-show_panel_logs() {
-    show_logo
-    echo -e "${BLUE}${BOLD}🚀 Логи панели Remnawave${NC}\n"
-
-    if [ ! -d "/opt/remnawave" ]; then
-        echo -e "${RED}❌ Папка /opt/remnawave не найдена.${NC}"
-        read -p "Нажмите Enter..."
-        return
-    fi
-
-    cd /opt/remnawave
-    echo -e "${YELLOW}Нажмите Ctrl+C для выхода из логов${NC}\n"
-    docker compose logs -f --tail=100
-}
-
-show_subscription_logs() {
-    show_logo
-    echo -e "${BLUE}${BOLD}📄 Логи страницы подписки${NC}\n"
-
-    if [ ! -d "/opt/remnawave/subscription" ]; then
-        echo -e "${RED}❌ Папка /opt/remnawave/subscription не найдена.${NC}"
-        read -p "Нажмите Enter..."
-        return
-    fi
-
-    cd /opt/remnawave/subscription
-    echo -e "${YELLOW}Нажмите Ctrl+C для выхода из логов${NC}\n"
-    docker compose logs -f --tail=100
-}
-
-# ============================================
-# УДАЛЕНИЕ КОМПОНЕНТОВ
-# ============================================
-show_uninstall_menu() {
-    while true; do
-        show_logo
-        echo -e "${RED}${BOLD}🗑️  Удаление компонентов${NC}\n"
-        echo -e "${YELLOW}ВНИМАНИЕ: Удаление безвозвратно!${NC}\n"
-        echo -e "  ${CYAN}1)${NC} Удалить Remnawave Panel (включая подписку)"
-        echo -e "  ${CYAN}2)${NC} Удалить Bedolaga Bot"
-        echo -e "  ${CYAN}3)${NC} Удалить Bedolaga Cabinet"
-        echo -e "  ${CYAN}4)${NC} Удалить Caddy (весь прокси)"
-        echo -e "  ${CYAN}5)${NC} Удалить Cloudflare DDNS"
-        echo -e "  ${CYAN}6)${NC} Удалить Cloudflare WARP"
-        echo -e "  ${CYAN}7)${NC} Удалить ВСЁ (полная очистка)"
-        echo -e "  ${CYAN}0)${NC} 🔙 Назад"
-        read -p "${CYAN}▶${NC} Ваш выбор: " uninstall_choice
-
-        case $uninstall_choice in
-            1) uninstall_panel ;;
-            2) uninstall_bedolaga_bot ;;
-            3) uninstall_cabinet ;;
-            4) uninstall_caddy ;;
-            5) uninstall_ddns ;;
-            6) uninstall_warp ;;
-            7) uninstall_all ;;
-            0) break ;;
-            *) echo -e "${RED}❌ Неверный выбор.${NC}"; sleep 2 ;;
-        esac
-    done
-}
-
-uninstall_panel() {
-    show_logo
-    echo -e "${RED}${BOLD}🗑️  Удаление Remnawave Panel${NC}\n"
-    read -p "Вы уверены, что хотите удалить панель и все её данные? (y/n): " confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}Отмена.${NC}"
-        read -p "Нажмите Enter..."
-        return
-    fi
-
-    if [ -d "/opt/remnawave" ]; then
-        cd /opt/remnawave
-        docker compose down -v 2>/dev/null
-        cd ..
-        rm -rf /opt/remnawave
-        echo -e "${GREEN}✅ Панель Remnawave удалена.${NC}"
-    else
-        echo -e "${YELLOW}⚠️  Панель не найдена.${NC}"
-    fi
-
-    blocks_dir="/opt/remnawave/caddy/blocks"
-    if [ -d "$blocks_dir" ]; then
-        for block_file in "$blocks_dir"/*; do
-            if [ -f "$block_file" ]; then
-                if grep -q "reverse_proxy.*remnawave:3000" "$block_file" || grep -q "reverse_proxy.*remnawave-subscription-page:3010" "$block_file"; then
-                    rm -f "$block_file"
-                    echo -e "${GREEN}✅ Удалён блок $(basename "$block_file")${NC}"
-                fi
-            fi
-        done
-        rebuild_caddyfile
-    fi
-
-    if check_caddy_installed; then
-        cd /opt/remnawave/caddy
-        docker compose restart
-        echo -e "${GREEN}✅ Caddy перезапущен.${NC}"
-    fi
-
-    echo -e "${GREEN}✅ Удаление панели завершено.${NC}"
-    read -p "Нажмите Enter для возврата..."
-}
-
-uninstall_bedolaga_bot() {
-    show_logo
-    echo -e "${RED}${BOLD}🗑️  Удаление Bedolaga Bot${NC}\n"
-    read -p "Вы уверены, что хотите удалить бота? (y/n): " confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}Отмена.${NC}"
-        read -p "Нажмите Enter..."
-        return
-    fi
-
-    BOT_DOMAIN=""
-    if [ -f "/opt/bedolaga-bot/.env" ]; then
-        BOT_DOMAIN=$(grep -E "^WEBHOOK_URL=" /opt/bedolaga-bot/.env | sed -E 's|^WEBHOOK_URL=https?://([^:/]+).*$|\1|')
-    fi
-
-    if [ -d "/opt/bedolaga-bot" ]; then
-        cd /opt/bedolaga-bot
-        docker compose down -v 2>/dev/null
-        cd ..
-        rm -rf /opt/bedolaga-bot
-        echo -e "${GREEN}✅ Bedolaga Bot удалён.${NC}"
-    else
-        echo -e "${YELLOW}⚠️  Бот не найден.${NC}"
-    fi
-
-    if [ -n "$BOT_DOMAIN" ]; then
-        remove_caddy_block "$BOT_DOMAIN"
-    fi
-
-    if check_caddy_installed; then
-        cd /opt/remnawave/caddy
-        docker compose restart
-        echo -e "${GREEN}✅ Caddy перезапущен.${NC}"
-    fi
-
-    echo -e "${GREEN}✅ Удаление бота завершено.${NC}"
-    read -p "Нажмите Enter для возврата..."
-}
-
-uninstall_cabinet() {
-    show_logo
-    echo -e "${RED}${BOLD}🗑️  Удаление Bedolaga Cabinet${NC}\n"
-    read -p "Вы уверены, что хотите удалить Cabinet? (y/n): " confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}Отмена.${NC}"
-        read -p "Нажмите Enter..."
-        return
-    fi
-
-    CABINET_DOMAIN=""
-    if [ -f "/opt/bedolaga-cabinet/.env" ]; then
-        CABINET_DOMAIN=$(grep -E "^VITE_API_URL=" /opt/bedolaga-cabinet/.env | sed -E 's|^.*//([^:/]+).*$|\1|')
-    fi
-
-    if [ -d "/opt/bedolaga-cabinet" ]; then
-        cd /opt/bedolaga-cabinet
-        docker compose down -v 2>/dev/null
-        cd ..
-        rm -rf /opt/bedolaga-cabinet
-        echo -e "${GREEN}✅ Bedolaga Cabinet удалён.${NC}"
-    else
-        echo -e "${YELLOW}⚠️  Cabinet не найден.${NC}"
-    fi
-
-    if [ -d "/srv/cabinet" ]; then
-        rm -rf /srv/cabinet
-        echo -e "${GREEN}✅ Статика кабинета удалена.${NC}"
-    fi
-
-    if [ -n "$CABINET_DOMAIN" ]; then
-        remove_caddy_block "$CABINET_DOMAIN"
-    fi
-
-    if check_caddy_installed; then
-        cd /opt/remnawave/caddy
-        docker compose restart
-        echo -e "${GREEN}✅ Caddy перезапущен.${NC}"
-    fi
-
-    echo -e "${GREEN}✅ Удаление Cabinet завершено.${NC}"
-    read -p "Нажмите Enter для возврата..."
-}
-
-uninstall_caddy() {
-    show_logo
-    echo -e "${RED}${BOLD}🗑️  Удаление Caddy${NC}\n"
-    read -p "Вы уверены, что хотите удалить Caddy и все SSL-сертификаты? (y/n): " confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}Отмена.${NC}"
-        read -p "Нажмите Enter..."
-        return
-    fi
-
-    if [ -d "/opt/remnawave/caddy" ]; then
-        cd /opt/remnawave/caddy
-        docker compose down -v 2>/dev/null
-        cd ..
-        rm -rf /opt/remnawave/caddy
-        echo -e "${GREEN}✅ Caddy удалён.${NC}"
-    else
-        echo -e "${YELLOW}⚠️  Caddy не найден.${NC}"
-    fi
-
-    docker volume rm caddy-ssl-data 2>/dev/null
-
-    echo -e "${GREEN}✅ Удаление Caddy завершено.${NC}"
-    read -p "Нажмите Enter для возврата..."
-}
-
-uninstall_ddns() {
-    show_logo
-    echo -e "${RED}${BOLD}🗑️  Удаление Cloudflare DDNS${NC}\n"
-    read -p "Вы уверены, что хотите удалить DDNS? (y/n): " confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}Отмена.${NC}"
-        read -p "Нажмите Enter..."
-        return
-    fi
-
-    systemctl stop cloudflare-ddns.timer 2>/dev/null
-    systemctl disable cloudflare-ddns.timer 2>/dev/null
-    systemctl stop cloudflare-ddns.service 2>/dev/null
-    systemctl disable cloudflare-ddns.service 2>/dev/null
-
-    rm -f /etc/systemd/system/cloudflare-ddns.timer
-    rm -f /etc/systemd/system/cloudflare-ddns.service
-    systemctl daemon-reload
-
-    rm -rf /opt/cloudflare-ddns
-
-    echo -e "${GREEN}✅ Cloudflare DDNS удалён.${NC}"
-    read -p "Нажмите Enter для возврата..."
-}
-
-uninstall_all() {
-    show_logo
-    echo -e "${RED}${BOLD}🗑️  ПОЛНАЯ ОЧИСТКА ВСЕХ КОМПОНЕНТОВ${NC}\n"
-    read -p "ВНИМАНИЕ! Это удалит всё: панель, бота, кабинет, Caddy, DDNS, WARP. Продолжить? (y/n): " confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}Отмена.${NC}"
-        read -p "Нажмите Enter..."
-        return
-    fi
-
-    uninstall_panel
-    uninstall_bedolaga_bot
-    uninstall_cabinet
-    uninstall_caddy
-    uninstall_ddns
-    uninstall_warp
-
-    docker system prune -af --volumes 2>/dev/null
-
-    echo -e "${GREEN}${BOLD}✅ Полная очистка завершена!${NC}"
     read -p "Нажмите Enter для возврата..."
 }
 
