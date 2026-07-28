@@ -1114,7 +1114,11 @@ uninstall_nginx() {
     rm -rf /etc/nginx/sites-enabled/*
 
     # Удаляем все сертификаты Let's Encrypt
-    certbot delete --cert-name "$(ls /etc/letsencrypt/live/)" --non-interactive 2>/dev/null || true
+    for cert in /etc/letsencrypt/live/*; do
+        if [ -d "$cert" ]; then
+            certbot delete --cert-name "$(basename "$cert")" --non-interactive 2>/dev/null
+        fi
+    done
 
     echo -e "${GREEN}✅ Nginx и сертификаты удалены.${NC}"
     read -p "Нажмите Enter для возврата..."
