@@ -1,8 +1,9 @@
 #!/bin/bash
-# bedolaga-installer.sh
-# Поддержка: amd64, arm64 (ARMv8), armv7l (ARMv7)
-# Автоматическая установка Bedolaga Bot + Cabinet
-# с интеграцией в существующий Nginx и SSL (Certbot)
+# Установщик Bedolaga Bot + Cabinet
+# Версия: 2.0.4
+# Поддерживаемые архитектуры: amd64, arm64, armv7l
+# Репозиторий: https://github.com/Santey990/Remnawave-bedolaga-Auto-Installer
+# Лицензия: MIT
 
 set -e
 set -o pipefail
@@ -13,96 +14,139 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# ---------- Проверка root ----------
+# ---------------------- Проверка root ----------------------
 if [[ $EUID -ne 0 ]]; then
-   echo -e "${RED}Запускайте с sudo.${NC}"
+   echo -e "${RED}❌ Скрипт должен запускаться с правами root (sudo).${NC}"
    exit 1
 fi
 
-# ---------- Определение ОС и архитектуры ----------
+# ---------------------- Определение ОС и архитектуры ----------------------
 if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     OS=$ID
 else
-    echo -e "${RED}Не удалось определить ОС.${NC}"
+    echo -e "${RED}❌ Не удалось определить ОС. Поддерживаются только Ubuntu/Debian.${NC}"
     exit 1
 fi
 if [[ "$OS" != "ubuntu" && "$OS" != "debian" ]]; then
-    echo -e "${RED}Поддерживаются только Ubuntu/Debian.${NC}"
+    echo -e "${RED}❌ Поддерживаются только Ubuntu и Debian.${NC}"
     exit 1
 fi
 
 ARCH=$(uname -m)
 case "$ARCH" in
-    x86_64|amd64)
-        ARCH_NAME="amd64"
-        ;;
-    aarch64|arm64)
-        ARCH_NAME="arm64"
-        ;;
-    armv7l)
-        ARCH_NAME="armv7l"
-        ;;
-    *)
-        echo -e "${YELLOW}⚠️ Неизвестная архитектура: $ARCH. Попробуем продолжить, но могут быть проблемы.${NC}"
-        ARCH_NAME="$ARCH"
-        ;;
+    x86_64|amd64)   ARCH_NAME="amd64" ;;
+    aarch64|arm64)  ARCH_NAME="arm64" ;;
+    armv7l)         ARCH_NAME="armv7l" ;;
+    *)              ARCH_NAME="$ARCH" ;;
 esac
 echo -e "${GREEN}✅ ОС: $OS, Архитектура: $ARCH_NAME${NC}"
 
-# ---------- Функции ----------
+# ---------------------- Вспомогательные функции ----------------------
 is_port_in_use() {
     ss -tulpn | grep -q ":$1 "
 }
 
+# Функция поиска порта с учётом того, что если порт занят nginx – считаем его свободным
 find_telegram_port() {
     local allowed_ports=(88 8443 443)
     for port in "${allowed_ports[@]}"; do
-        if ! is_port_in_use $port; then
+        if is_port_in_use $port; then
+            # Проверяем, кто слушает порт
+            local process=$(ss -tulpn | grep ":$port " | awk '{print $7}' | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+            if [[ -n $process ]]; then
+                local proc_name=$(ps -p $process -o comm= 2>/dev/null)
+                if [[ "$proc_name" == "nginx" ]]; then
+                    >&2 echo -e "${YELLOW}⚠️ Порт $port занят Nginx (используем его).${NC}"
+                    echo "$port"
+                    return 0
+                fi
+            fi
+            >&2 echo -e "${YELLOW}⚠️ Порт $port занят другим процессом, пробуем следующий...${NC}"
+        else
             echo "$port"
             return 0
-        else
-            >&2 echo -e "${YELLOW}⚠️ Порт $port занят, пробуем следующий...${NC}"
         fi
     done
-    >&2 echo -e "${RED}❌ Все разрешённые порты (88, 8443, 443) заняты.${NC}"
+    >&2 echo -e "${RED}❌ Все разрешённые порты (88, 8443, 443) заняты другими процессами.${NC}"
     exit 1
 }
 
-# ---------- Запрос данных ----------
-echo -e "${YELLOW}Введите основной домен (например, example.com), уже используемый для вашей ноды:${NC}"
+# ---------------------- Проверка установки от eGames ----------------------
+check_egames_installation() {
+    local egames_detected=false
+    
+    # Проверяем наличие маркерного файла или .env с SECRET_KEY
+    if [[ -f "/opt/remnawave-reverse-proxy/.egames-installed" ]] || \
+       [[ -f "/opt/remnawave-reverse-proxy/.env" && $(grep -c "SECRET_KEY" /opt/remnawave-reverse-proxy/.env 2>/dev/null) -gt 0 ]]; then
+        egames_detected=true
+    fi
+    
+    # Дополнительная проверка: наличие скрипта eGames в истории команд
+    if [[ -f "/root/.bash_history" ]] && grep -q "remnawave-reverse-proxy" /root/.bash_history 2>/dev/null; then
+        egames_detected=true
+    fi
+    
+    if [[ "$egames_detected" == true ]]; then
+        echo -e "${YELLOW}🔍 Обнаружена установка панели/ноды через скрипт eGames.${NC}"
+        echo -e "${YELLOW}Для корректной работы бота требуется секретный ключ панели.${NC}"
+        echo -e "${YELLOW}Формат ключа: XXXXXXX:DDDDDDDD (где XXXXXXX - ID, DDDDDDDD - секрет)${NC}"
+        echo -e "${YELLOW}Его можно скопировать в панели: Nodes → Management → Secret Key${NC}"
+        read -p "Введите REMNAWAVE_SECRET_KEY (или оставьте пустым для пропуска): " REMNAWAVE_SECRET_KEY_INPUT
+        if [[ -n "$REMNAWAVE_SECRET_KEY_INPUT" ]]; then
+            REMNAWAVE_SECRET_KEY="$REMNAWAVE_SECRET_KEY_INPUT"
+            echo -e "${GREEN}✅ REMNAWAVE_SECRET_KEY задан.${NC}"
+        else
+            echo -e "${YELLOW}⚠️ REMNAWAVE_SECRET_KEY не задан. Если бот не будет работать, добавьте его позже в .env.${NC}"
+        fi
+    else
+        echo -e "${GREEN}✅ Установка eGames не обнаружена.${NC}"
+    fi
+}
+
+# ---------------------- Ввод данных ----------------------
+echo -e "${YELLOW}Введите основной домен (например, example.com), который уже используется для вашей ноды:${NC}"
 read -p "Основной домен: " MAIN_DOMAIN
+
 echo -e "${YELLOW}Введите поддомен для вебхука бота (например, hooks.$MAIN_DOMAIN):${NC}"
 read -p "Поддомен вебхука: " WEBHOOK_DOMAIN
+
 echo -e "${YELLOW}Введите поддомен для веб-кабинета (например, cabinet.$MAIN_DOMAIN):${NC}"
 read -p "Поддомен кабинета: " CABINET_DOMAIN
+
 echo -e "${YELLOW}Введите токен бота от @BotFather:${NC}"
-read -sp "BOT_TOKEN: " BOT_TOKEN; echo
+read -sp "Токен бота: " BOT_TOKEN; echo
+
 echo -e "${YELLOW}Введите ваш Telegram ID (администратора):${NC}"
-read -p "ADMIN_IDS: " ADMIN_IDS
+read -p "Telegram ID: " ADMIN_IDS
+
 echo -e "${YELLOW}Введите API URL панели Remnawave (например, https://panel.$MAIN_DOMAIN):${NC}"
-read -p "REMNAWAVE_API_URL: " REMNAWAVE_API_URL
+read -p "API URL панели: " REMNAWAVE_API_URL
+
 echo -e "${YELLOW}Введите API KEY от панели Remnawave:${NC}"
-read -sp "REMNAWAVE_API_KEY: " REMNAWAVE_API_KEY; echo
+read -sp "API KEY: " REMNAWAVE_API_KEY; echo
 
 WEBHOOK_SECRET=$(openssl rand -hex 32)
 CABINET_JWT_SECRET=$(openssl rand -hex 32)
 
-# ---------- Установка Docker (для ARM тоже работает) ----------
+# ---------------------- Проверка на eGames и запрос REMNAWAVE_SECRET_KEY ----------------------
+check_egames_installation
+
+# ---------------------- Установка Docker ----------------------
 echo -e "${YELLOW}➜ Проверка Docker...${NC}"
 if ! command -v docker &> /dev/null; then
-    echo -e "${YELLOW}Устанавливаем Docker...${NC}"
+    echo -e "${YELLOW}Установка Docker...${NC}"
     curl -fsSL https://get.docker.com -o get-docker.sh
     sh get-docker.sh
     usermod -aG docker $SUDO_USER
 fi
 if ! docker compose version &> /dev/null; then
-    echo -e "${YELLOW}Устанавливаем Docker Compose plugin...${NC}"
+    echo -e "${YELLOW}Установка Docker Compose plugin...${NC}"
     apt-get update && apt-get install -y docker-compose-plugin
 fi
 echo -e "${GREEN}✅ Docker готов.${NC}"
 
-# ---------- Установка Nginx ----------
+# ---------------------- Установка Nginx ----------------------
 echo -e "${YELLOW}➜ Проверка Nginx...${NC}"
 if ! command -v nginx &> /dev/null; then
     apt-get update && apt-get install -y nginx
@@ -110,7 +154,7 @@ if ! command -v nginx &> /dev/null; then
 fi
 echo -e "${GREEN}✅ Nginx установлен.${NC}"
 
-# ---------- Установка Certbot + плагин Nginx ----------
+# ---------------------- Установка Certbot + плагин ----------------------
 echo -e "${YELLOW}➜ Проверка Certbot и плагина Nginx...${NC}"
 if ! command -v certbot &> /dev/null; then
     apt-get update && apt-get install -y certbot python3-certbot-nginx
@@ -121,20 +165,20 @@ else
 fi
 echo -e "${GREEN}✅ Certbot и плагин готовы.${NC}"
 
-# ---------- Поиск свободного внешнего порта HTTPS ----------
+# ---------------------- Выбор порта (с учётом Nginx) ----------------------
 echo -e "${YELLOW}➜ Поиск свободного HTTPS-порта (разрешённого Telegram)...${NC}"
 HTTPS_PORT=$(find_telegram_port)
 echo -e "${GREEN}✅ Выбран внешний HTTPS-порт: $HTTPS_PORT${NC}"
 
-# ---------- Внутренний порт бота ----------
+# ---------------------- Внутренний порт бота ----------------------
 BOT_INTERNAL_PORT=8080
 HOST_BOT_PORT=8081
 while is_port_in_use $HOST_BOT_PORT; do
     HOST_BOT_PORT=$((HOST_BOT_PORT + 1))
 done
-echo -e "${GREEN}✅ Внешний порт для бота (для Nginx): $HOST_BOT_PORT (внутри: $BOT_INTERNAL_PORT)${NC}"
+echo -e "${GREEN}✅ Внешний порт для бота (для Nginx): $HOST_BOT_PORT (внутренний: $BOT_INTERNAL_PORT)${NC}"
 
-# ---------- Проверка DNS ----------
+# ---------------------- Проверка DNS ----------------------
 echo -e "${YELLOW}➜ Проверка DNS для поддоменов...${NC}"
 if ! command -v dig &> /dev/null; then
     apt-get update && apt-get install -y dnsutils
@@ -142,7 +186,7 @@ fi
 SERVER_IP=$(curl -s ifconfig.me)
 for domain in "$WEBHOOK_DOMAIN" "$CABINET_DOMAIN"; do
     if ! dig +short "$domain" | grep -q "$SERVER_IP"; then
-        echo -e "${RED}⚠️ DNS-запись $domain не указывает на этот сервер.${NC}"
+        echo -e "${RED}⚠️ DNS-запись для $domain не указывает на этот сервер.${NC}"
         read -p "Продолжить? (y/N) " ans
         [[ ! "$ans" =~ ^[Yy]$ ]] && exit 1
     else
@@ -150,7 +194,7 @@ for domain in "$WEBHOOK_DOMAIN" "$CABINET_DOMAIN"; do
     fi
 done
 
-# ---------- Открытие портов в фаерволе ----------
+# ---------------------- Открытие портов в фаерволе ----------------------
 echo -e "${YELLOW}➜ Открываем порты в фаерволе...${NC}"
 if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
     ufw allow 80/tcp || true
@@ -171,7 +215,7 @@ else
 fi
 sleep 2
 
-# ---------- Клонирование бота ----------
+# ---------------------- Клонирование бота ----------------------
 echo -e "${YELLOW}➜ Установка Bedolaga Bot...${NC}"
 cd /opt
 if [[ -d "remnawave-bedolaga-telegram-bot" ]]; then
@@ -181,12 +225,12 @@ else
     cd remnawave-bedolaga-telegram-bot
 fi
 
-# ---------- Создание папок с правами ----------
+# ---------------------- Создание папок с правами ----------------------
 echo -e "${YELLOW}➜ Создание папок для бэкапов, логов и локалей...${NC}"
 mkdir -p data/backups logs locales
 chmod -R 777 data logs locales
 
-# ---------- Создание .env ----------
+# ---------------------- Создание .env ----------------------
 cat > .env <<EOF
 BOT_TOKEN=$BOT_TOKEN
 ADMIN_IDS=$ADMIN_IDS
@@ -205,23 +249,26 @@ CABINET_ALLOWED_ORIGINS=https://$CABINET_DOMAIN:$HTTPS_PORT
 WEB_API_ALLOWED_ORIGINS=https://$CABINET_DOMAIN:$HTTPS_PORT
 EOF
 
-# ---------- Настройка docker-compose.yml ----------
-# Проверяем, есть ли уже порты, если нет — добавляем (упрощённо)
+# Добавляем REMNAWAVE_SECRET_KEY, если он был задан
+if [[ -n "$REMNAWAVE_SECRET_KEY" ]]; then
+    echo "REMNAWAVE_SECRET_KEY=$REMNAWAVE_SECRET_KEY" >> .env
+fi
+
+# ---------------------- Обновление docker-compose.yml ----------------------
 if ! grep -q "$HOST_BOT_PORT:$BOT_INTERNAL_PORT" docker-compose.yml; then
-    # Если есть секция ports, заменяем первую строку, иначе добавляем после image
     if grep -q "ports:" docker-compose.yml; then
         sed -i "/ports:/,/^[^ ]/ s/- .*:.*/- \"$HOST_BOT_PORT:$BOT_INTERNAL_PORT\"/" docker-compose.yml
     else
-        # Вставляем секцию ports после строки с image (упрощённо)
         sed -i "/image:/a \    ports:\n      - \"$HOST_BOT_PORT:$BOT_INTERNAL_PORT\"" docker-compose.yml
     fi
 fi
 
-# ---------- Запуск бота ----------
+# ---------------------- Запуск бота (временно, чтобы создать базу данных) ----------------------
 docker compose up -d
-echo -e "${GREEN}✅ Bedolaga Bot запущен.${NC}"
+echo -e "${GREEN}✅ Bedolaga Bot запущен (ожидаем готовности).${NC}"
+sleep 10
 
-# ---------- Установка Cabinet ----------
+# ---------------------- Установка Cabinet ----------------------
 echo -e "${YELLOW}➜ Установка Cabinet...${NC}"
 mkdir -p /srv/cabinet
 docker pull ghcr.io/bedolaga-dev/bedolaga-cabinet:latest
@@ -229,11 +276,71 @@ docker create --name tmp_cabinet ghcr.io/bedolaga-dev/bedolaga-cabinet:latest
 docker cp tmp_cabinet:/usr/share/nginx/html/. /srv/cabinet/
 docker rm tmp_cabinet
 chown -R www-data:www-data /srv/cabinet
-echo -e "${GREEN}✅ Cabinet файлы размещены.${NC}"
+echo -e "${GREEN}✅ Файлы Cabinet размещены.${NC}"
 
-# ---------- Настройка Nginx ----------
-echo -e "${YELLOW}➜ Создание конфигураций Nginx (порт $HTTPS_PORT)...${NC}"
+# ---------------------- Настройка Nginx (ТОЛЬКО HTTP для получения сертификата) ----------------------
+echo -e "${YELLOW}➜ Создание временных конфигураций Nginx (только HTTP, порт 80)...${NC}"
 rm -f /etc/nginx/sites-enabled/default
+
+cat > /etc/nginx/sites-available/bedolaga-webhook <<EOF
+server {
+    listen 80;
+    server_name $WEBHOOK_DOMAIN;
+    location / {
+        proxy_pass http://127.0.0.1:$HOST_BOT_PORT;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+
+cat > /etc/nginx/sites-available/bedolaga-cabinet <<EOF
+server {
+    listen 80;
+    server_name $CABINET_DOMAIN;
+    root /srv/cabinet;
+    index index.html;
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+    location /api {
+        proxy_pass http://127.0.0.1:$HOST_BOT_PORT;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+
+ln -sf /etc/nginx/sites-available/bedolaga-webhook /etc/nginx/sites-enabled/
+ln -sf /etc/nginx/sites-available/bedolaga-cabinet /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+echo -e "${GREEN}✅ Nginx перезагружен (только HTTP).${NC}"
+
+# ---------------------- Получение SSL-сертификатов через Certbot ----------------------
+echo -e "${YELLOW}➜ Получение SSL-сертификатов...${NC}"
+if certbot certificates 2>/dev/null | grep -q "Domains:.*$MAIN_DOMAIN"; then
+    echo -e "${YELLOW}Обнаружен существующий сертификат для $MAIN_DOMAIN. Расширяем...${NC}"
+    certbot --nginx -d "$MAIN_DOMAIN" -d "$WEBHOOK_DOMAIN" -d "$CABINET_DOMAIN" \
+            --expand --non-interactive --agree-tos --email "admin@$MAIN_DOMAIN" || true
+else
+    certbot --nginx -d "$MAIN_DOMAIN" -d "$WEBHOOK_DOMAIN" -d "$CABINET_DOMAIN" \
+            --non-interactive --agree-tos --email "admin@$MAIN_DOMAIN" || true
+fi
+
+# Проверяем, что сертификат сохранён
+if [ -f "/etc/letsencrypt/live/$MAIN_DOMAIN/fullchain.pem" ]; then
+    echo -e "${GREEN}✅ SSL-сертификаты успешно получены.${NC}"
+else
+    echo -e "${RED}❌ Не удалось получить сертификаты. Проверьте порт 80 и DNS.${NC}"
+    exit 1
+fi
+
+# ---------------------- Добавление SSL и редиректа в конфиги Nginx ----------------------
+echo -e "${YELLOW}➜ Добавляем SSL и редирект в конфигурации Nginx...${NC}"
 
 cat > /etc/nginx/sites-available/bedolaga-webhook <<EOF
 server {
@@ -288,34 +395,14 @@ server {
 }
 EOF
 
-ln -sf /etc/nginx/sites-available/bedolaga-webhook /etc/nginx/sites-enabled/
-ln -sf /etc/nginx/sites-available/bedolaga-cabinet /etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx
-echo -e "${GREEN}✅ Nginx перезагружен.${NC}"
+echo -e "${GREEN}✅ Nginx перезагружен с SSL.${NC}"
 
-# ---------- SSL-сертификаты ----------
-echo -e "${YELLOW}➜ Получение SSL-сертификатов...${NC}"
-if certbot certificates 2>/dev/null | grep -q "Domains:.*$MAIN_DOMAIN"; then
-    certbot --nginx -d "$MAIN_DOMAIN" -d "$WEBHOOK_DOMAIN" -d "$CABINET_DOMAIN" \
-            --expand --non-interactive --agree-tos --email "admin@$MAIN_DOMAIN"
-else
-    certbot --nginx -d "$MAIN_DOMAIN" -d "$WEBHOOK_DOMAIN" -d "$CABINET_DOMAIN" \
-            --non-interactive --agree-tos --email "admin@$MAIN_DOMAIN"
-fi
-
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ SSL-сертификаты успешно установлены.${NC}"
-    systemctl reload nginx
-else
-    echo -e "${RED}❌ Ошибка при получении сертификатов. Проверьте порт 80 и DNS.${NC}"
-    exit 1
-fi
-
-# ---------- Перезапуск бота ----------
+# ---------------------- Перезапуск бота (на всякий случай) ----------------------
 docker compose restart bot
 sleep 5
 
-# ---------- Установка вебхука ----------
+# ---------------------- Установка вебхука в Telegram ----------------------
 echo -e "${YELLOW}➜ Установка вебхука в Telegram...${NC}"
 WEBHOOK_URL="https://$WEBHOOK_DOMAIN:$HTTPS_PORT/webhook"
 RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/setWebhook" \
@@ -328,16 +415,19 @@ else
     echo "curl -X POST 'https://api.telegram.org/bot$BOT_TOKEN/setWebhook' -d 'url=$WEBHOOK_URL&secret_token=$WEBHOOK_SECRET_TOKEN'"
 fi
 
-# ---------- Финальное сообщение ----------
+# ---------------------- Финальное сообщение ----------------------
 echo -e "${GREEN}===============================================${NC}"
 echo -e "${GREEN}✅ Установка завершена!${NC}"
 echo -e "🔹 Вебхук бота: https://$WEBHOOK_DOMAIN:$HTTPS_PORT"
 echo -e "🔹 Веб-кабинет: https://$CABINET_DOMAIN:$HTTPS_PORT"
 echo -e "🔹 Порт для доступа Nginx к боту: $HOST_BOT_PORT"
 echo -e "🔹 Архитектура: $ARCH_NAME"
+if [[ -n "$REMNAWAVE_SECRET_KEY" ]]; then
+    echo -e "🔹 REMNAWAVE_SECRET_KEY: задан"
+fi
 echo -e ""
 echo -e "${YELLOW}⚠️  Важно:${NC}"
-echo -e "   - Проверьте доступность кабинета в браузере."
-echo -e "   - Отправьте боту команду /start."
+echo -e "   - Проверьте кабинет в браузере: https://$CABINET_DOMAIN:$HTTPS_PORT"
+echo -e "   - Отправьте боту команду /start в Telegram"
 echo -e "   - При необходимости проверьте логи: docker compose logs bot"
 echo -e "${GREEN}===============================================${NC}"
