@@ -1,39 +1,39 @@
 #!/bin/bash
-# Bedolaga Bot + Cabinet Installer
-# Version: 2.0.1
-# Supported architectures: amd64, arm64, armv7l
-# Repository: https://github.com/Santey990/Remnawave-bedolaga-Auto-Installer
-# License: MIT
+# Bedolaga Bot + Cabinet Установщик
+# Версия: 2.0.2
+# Поддерживаемые архитектуры: amd64, arm64, armv7l
+# Репозиторий: https://github.com/Santey990/Remnawave-bedolaga-Auto-Installer
+# Лицензия: MIT
 
 set -e
 set -o pipefail
 
-# ---------------------- Colors ----------------------
+# ---------------------- Цвета для вывода ----------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# ---------------------- Root check ----------------------
+# ---------------------- Проверка прав root ----------------------
 if [[ $EUID -ne 0 ]]; then
-   echo -e "${RED}❌ This script must be run as root (sudo).${NC}"
+   echo -e "${RED}❌ Этот скрипт должен запускаться с правами root (sudo).${NC}"
    exit 1
 fi
 
-# ---------------------- OS detection ----------------------
+# ---------------------- Определение ОС ----------------------
 if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     OS=$ID
 else
-    echo -e "${RED}❌ Failed to detect OS. Only Ubuntu/Debian are supported.${NC}"
+    echo -e "${RED}❌ Не удалось определить ОС. Поддерживаются только Ubuntu/Debian.${NC}"
     exit 1
 fi
 if [[ "$OS" != "ubuntu" && "$OS" != "debian" ]]; then
-    echo -e "${RED}❌ Only Ubuntu and Debian are supported.${NC}"
+    echo -e "${RED}❌ Поддерживаются только Ubuntu и Debian.${NC}"
     exit 1
 fi
 
-# ---------------------- Architecture detection ----------------------
+# ---------------------- Определение архитектуры ----------------------
 ARCH=$(uname -m)
 case "$ARCH" in
     x86_64|amd64)   ARCH_NAME="amd64" ;;
@@ -41,13 +41,15 @@ case "$ARCH" in
     armv7l)         ARCH_NAME="armv7l" ;;
     *)              ARCH_NAME="$ARCH" ;;
 esac
-echo -e "${GREEN}✅ OS: $OS, Architecture: $ARCH_NAME${NC}"
+echo -e "${GREEN}✅ ОС: $OS, Архитектура: $ARCH_NAME${NC}"
 
-# ---------------------- Helper functions ----------------------
+# ---------------------- Вспомогательные функции ----------------------
+# Проверка, занят ли порт
 is_port_in_use() {
     ss -tulpn | grep -q ":$1 "
 }
 
+# Поиск свободного порта из разрешённых Telegram (88, 8443, 443)
 find_telegram_port() {
     local allowed_ports=(88 8443 443)
     for port in "${allowed_ports[@]}"; do
@@ -55,62 +57,63 @@ find_telegram_port() {
             echo "$port"
             return 0
         else
-            >&2 echo -e "${YELLOW}⚠️ Port $port is busy, trying next...${NC}"
+            >&2 echo -e "${YELLOW}⚠️ Порт $port занят, пробуем следующий...${NC}"
         fi
     done
-    >&2 echo -e "${RED}❌ All allowed ports (88, 8443, 443) are busy.${NC}"
+    >&2 echo -e "${RED}❌ Все разрешённые порты (88, 8443, 443) заняты.${NC}"
     exit 1
 }
 
-# ---------------------- User input ----------------------
-echo -e "${YELLOW}Enter the main domain (e.g., example.com) already used for your node:${NC}"
-read -p "Main domain: " MAIN_DOMAIN
+# ---------------------- Запрос данных у пользователя ----------------------
+echo -e "${YELLOW}Введите основной домен (например, example.com), уже используемый для вашей ноды:${NC}"
+read -p "Основной домен: " MAIN_DOMAIN
 
-echo -e "${YELLOW}Enter the subdomain for the bot webhook (e.g., hooks.$MAIN_DOMAIN):${NC}"
-read -p "Webhook subdomain: " WEBHOOK_DOMAIN
+echo -e "${YELLOW}Введите поддомен для вебхука бота (например, hooks.$MAIN_DOMAIN):${NC}"
+read -p "Поддомен вебхука: " WEBHOOK_DOMAIN
 
-echo -e "${YELLOW}Enter the subdomain for the web cabinet (e.g., cabinet.$MAIN_DOMAIN):${NC}"
-read -p "Cabinet subdomain: " CABINET_DOMAIN
+echo -e "${YELLOW}Введите поддомен для веб-кабинета (например, cabinet.$MAIN_DOMAIN):${NC}"
+read -p "Поддомен кабинета: " CABINET_DOMAIN
 
-echo -e "${YELLOW}Enter your bot token from @BotFather:${NC}"
-read -sp "BOT_TOKEN: " BOT_TOKEN; echo
+echo -e "${YELLOW}Введите токен бота от @BotFather:${NC}"
+read -sp "Токен бота: " BOT_TOKEN; echo
 
-echo -e "${YELLOW}Enter your Telegram ID (admin):${NC}"
-read -p "ADMIN_IDS: " ADMIN_IDS
+echo -e "${YELLOW}Введите ваш Telegram ID (администратор):${NC}"
+read -p "ID администратора: " ADMIN_IDS
 
-echo -e "${YELLOW}Enter the Remnawave panel API URL (e.g., https://panel.$MAIN_DOMAIN):${NC}"
-read -p "REMNAWAVE_API_URL: " REMNAWAVE_API_URL
+echo -e "${YELLOW}Введите API URL панели Remnawave (например, https://panel.$MAIN_DOMAIN):${NC}"
+read -p "API URL панели: " REMNAWAVE_API_URL
 
-echo -e "${YELLOW}Enter the Remnawave API KEY:${NC}"
-read -sp "REMNAWAVE_API_KEY: " REMNAWAVE_API_KEY; echo
+echo -e "${YELLOW}Введите API ключ панели Remnawave:${NC}"
+read -sp "API ключ: " REMNAWAVE_API_KEY; echo
 
+# Генерация секретов
 WEBHOOK_SECRET=$(openssl rand -hex 32)
 CABINET_JWT_SECRET=$(openssl rand -hex 32)
 
 # ---------------------- Docker ----------------------
-echo -e "${YELLOW}➜ Checking Docker...${NC}"
+echo -e "${YELLOW}➜ Проверка Docker...${NC}"
 if ! command -v docker &> /dev/null; then
-    echo -e "${YELLOW}Installing Docker...${NC}"
+    echo -e "${YELLOW}Установка Docker...${NC}"
     curl -fsSL https://get.docker.com -o get-docker.sh
     sh get-docker.sh
     usermod -aG docker $SUDO_USER
 fi
 if ! docker compose version &> /dev/null; then
-    echo -e "${YELLOW}Installing Docker Compose plugin...${NC}"
+    echo -e "${YELLOW}Установка Docker Compose плагина...${NC}"
     apt-get update && apt-get install -y docker-compose-plugin
 fi
-echo -e "${GREEN}✅ Docker ready.${NC}"
+echo -e "${GREEN}✅ Docker готов.${NC}"
 
 # ---------------------- Nginx ----------------------
-echo -e "${YELLOW}➜ Checking Nginx...${NC}"
+echo -e "${YELLOW}➜ Проверка Nginx...${NC}"
 if ! command -v nginx &> /dev/null; then
     apt-get update && apt-get install -y nginx
     systemctl enable nginx && systemctl start nginx
 fi
-echo -e "${GREEN}✅ Nginx installed.${NC}"
+echo -e "${GREEN}✅ Nginx установлен.${NC}"
 
-# ---------------------- Certbot ----------------------
-echo -e "${YELLOW}➜ Checking Certbot and Nginx plugin...${NC}"
+# ---------------------- Certbot и плагин для Nginx ----------------------
+echo -e "${YELLOW}➜ Проверка Certbot и плагина для Nginx...${NC}"
 if ! command -v certbot &> /dev/null; then
     apt-get update && apt-get install -y certbot python3-certbot-nginx
 else
@@ -118,45 +121,45 @@ else
         apt-get update && apt-get install -y python3-certbot-nginx
     fi
 fi
-echo -e "${GREEN}✅ Certbot and plugin ready.${NC}"
+echo -e "${GREEN}✅ Certbot и плагин готовы.${NC}"
 
-# ---------------------- Find free HTTPS port ----------------------
-echo -e "${YELLOW}➜ Looking for a free HTTPS port (allowed by Telegram)...${NC}"
+# ---------------------- Поиск свободного HTTPS-порта ----------------------
+echo -e "${YELLOW}➜ Поиск свободного HTTPS-порта (разрешённого Telegram)...${NC}"
 HTTPS_PORT=$(find_telegram_port)
-echo -e "${GREEN}✅ Selected external HTTPS port: $HTTPS_PORT${NC}"
+echo -e "${GREEN}✅ Выбран внешний HTTPS-порт: $HTTPS_PORT${NC}"
 
-# ---------------------- Internal bot port ----------------------
+# ---------------------- Внутренний порт бота ----------------------
 BOT_INTERNAL_PORT=8080
 HOST_BOT_PORT=8081
 while is_port_in_use $HOST_BOT_PORT; do
     HOST_BOT_PORT=$((HOST_BOT_PORT + 1))
 done
-echo -e "${GREEN}✅ External port for bot (for Nginx): $HOST_BOT_PORT (internal: $BOT_INTERNAL_PORT)${NC}"
+echo -e "${GREEN}✅ Внешний порт для бота (для Nginx): $HOST_BOT_PORT (внутренний: $BOT_INTERNAL_PORT)${NC}"
 
-# ---------------------- DNS check ----------------------
-echo -e "${YELLOW}➜ Checking DNS for subdomains...${NC}"
+# ---------------------- Проверка DNS ----------------------
+echo -e "${YELLOW}➜ Проверка DNS для поддоменов...${NC}"
 if ! command -v dig &> /dev/null; then
     apt-get update && apt-get install -y dnsutils
 fi
 SERVER_IP=$(curl -s ifconfig.me)
 for domain in "$WEBHOOK_DOMAIN" "$CABINET_DOMAIN"; do
     if ! dig +short "$domain" | grep -q "$SERVER_IP"; then
-        echo -e "${RED}⚠️ DNS record for $domain does not point to this server.${NC}"
-        read -p "Continue? (y/N) " ans
+        echo -e "${RED}⚠️ DNS-запись для $domain не указывает на этот сервер.${NC}"
+        read -p "Продолжить? (y/N) " ans
         [[ ! "$ans" =~ ^[Yy]$ ]] && exit 1
     else
         echo -e "${GREEN}✅ $domain -> OK${NC}"
     fi
 done
 
-# ---------------------- Firewall ----------------------
-echo -e "${YELLOW}➜ Opening ports in firewall...${NC}"
+# ---------------------- Открытие портов в фаерволе ----------------------
+echo -e "${YELLOW}➜ Открываем порты в фаерволе...${NC}"
 if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
     ufw allow 80/tcp || true
     ufw allow $HTTPS_PORT/tcp || true
     ufw allow $HOST_BOT_PORT/tcp || true
     ufw reload
-    echo -e "${GREEN}✅ Ports 80, $HTTPS_PORT and $HOST_BOT_PORT opened via UFW.${NC}"
+    echo -e "${GREEN}✅ Порты 80, $HTTPS_PORT и $HOST_BOT_PORT открыты через UFW.${NC}"
 elif command -v iptables &> /dev/null; then
     for port in 80 $HTTPS_PORT $HOST_BOT_PORT; do
         if ! iptables -C INPUT -p tcp --dport $port -j ACCEPT 2>/dev/null; then
@@ -164,14 +167,14 @@ elif command -v iptables &> /dev/null; then
         fi
     done
     command -v netfilter-persistent &> /dev/null && netfilter-persistent save
-    echo -e "${GREEN}✅ Ports opened via iptables.${NC}"
+    echo -e "${GREEN}✅ Порты открыты через iptables.${NC}"
 else
-    echo -e "${YELLOW}⚠️ No firewall found, open ports 80, $HTTPS_PORT and $HOST_BOT_PORT manually.${NC}"
+    echo -e "${YELLOW}⚠️ Не найден фаервол, откройте порты 80, $HTTPS_PORT и $HOST_BOT_PORT вручную.${NC}"
 fi
 sleep 2
 
-# ---------------------- Clone bot repository ----------------------
-echo -e "${YELLOW}➜ Installing Bedolaga Bot...${NC}"
+# ---------------------- Клонирование репозитория бота ----------------------
+echo -e "${YELLOW}➜ Установка Bedolaga Bot...${NC}"
 cd /opt
 if [[ -d "remnawave-bedolaga-telegram-bot" ]]; then
     cd remnawave-bedolaga-telegram-bot && git pull
@@ -180,12 +183,12 @@ else
     cd remnawave-bedolaga-telegram-bot
 fi
 
-# ---------------------- Create folders with permissions ----------------------
-echo -e "${YELLOW}➜ Creating folders for backups, logs and locales...${NC}"
+# ---------------------- Создание папок с правами ----------------------
+echo -e "${YELLOW}➜ Создание папок для бэкапов, логов и локалей...${NC}"
 mkdir -p data/backups logs locales
 chmod -R 777 data logs locales
 
-# ---------------------- Create .env ----------------------
+# ---------------------- Создание .env файла ----------------------
 cat > .env <<EOF
 BOT_TOKEN=$BOT_TOKEN
 ADMIN_IDS=$ADMIN_IDS
@@ -204,7 +207,7 @@ CABINET_ALLOWED_ORIGINS=https://$CABINET_DOMAIN:$HTTPS_PORT
 WEB_API_ALLOWED_ORIGINS=https://$CABINET_DOMAIN:$HTTPS_PORT
 EOF
 
-# ---------------------- Update docker-compose.yml ----------------------
+# ---------------------- Настройка docker-compose.yml (проброс портов) ----------------------
 if ! grep -q "$HOST_BOT_PORT:$BOT_INTERNAL_PORT" docker-compose.yml; then
     if grep -q "ports:" docker-compose.yml; then
         sed -i "/ports:/,/^[^ ]/ s/- .*:.*/- \"$HOST_BOT_PORT:$BOT_INTERNAL_PORT\"/" docker-compose.yml
@@ -213,22 +216,22 @@ if ! grep -q "$HOST_BOT_PORT:$BOT_INTERNAL_PORT" docker-compose.yml; then
     fi
 fi
 
-# ---------------------- Start bot ----------------------
+# ---------------------- Запуск бота ----------------------
 docker compose up -d
-echo -e "${GREEN}✅ Bedolaga Bot started.${NC}"
+echo -e "${GREEN}✅ Bedolaga Bot запущен.${NC}"
 
-# ---------------------- Install Cabinet ----------------------
-echo -e "${YELLOW}➜ Installing Cabinet...${NC}"
+# ---------------------- Установка Cabinet (веб-кабинет) ----------------------
+echo -e "${YELLOW}➜ Установка Cabinet...${NC}"
 mkdir -p /srv/cabinet
 docker pull ghcr.io/bedolaga-dev/bedolaga-cabinet:latest
 docker create --name tmp_cabinet ghcr.io/bedolaga-dev/bedolaga-cabinet:latest
 docker cp tmp_cabinet:/usr/share/nginx/html/. /srv/cabinet/
 docker rm tmp_cabinet
 chown -R www-data:www-data /srv/cabinet
-echo -e "${GREEN}✅ Cabinet files placed.${NC}"
+echo -e "${GREEN}✅ Файлы Cabinet размещены.${NC}"
 
-# ---------------------- Nginx configuration ----------------------
-echo -e "${YELLOW}➜ Creating Nginx configurations (port $HTTPS_PORT)...${NC}"
+# ---------------------- Настройка Nginx ----------------------
+echo -e "${YELLOW}➜ Создание конфигураций Nginx (порт $HTTPS_PORT)...${NC}"
 rm -f /etc/nginx/sites-enabled/default
 
 cat > /etc/nginx/sites-available/bedolaga-webhook <<EOF
@@ -287,10 +290,10 @@ EOF
 ln -sf /etc/nginx/sites-available/bedolaga-webhook /etc/nginx/sites-enabled/
 ln -sf /etc/nginx/sites-available/bedolaga-cabinet /etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx
-echo -e "${GREEN}✅ Nginx reloaded.${NC}"
+echo -e "${GREEN}✅ Nginx перезагружен.${NC}"
 
-# ---------------------- SSL certificates ----------------------
-echo -e "${YELLOW}➜ Obtaining SSL certificates...${NC}"
+# ---------------------- Получение SSL-сертификатов ----------------------
+echo -e "${YELLOW}➜ Получение SSL-сертификатов...${NC}"
 if certbot certificates 2>/dev/null | grep -q "Domains:.*$MAIN_DOMAIN"; then
     certbot --nginx -d "$MAIN_DOMAIN" -d "$WEBHOOK_DOMAIN" -d "$CABINET_DOMAIN" \
             --expand --non-interactive --agree-tos --email "admin@$MAIN_DOMAIN"
@@ -300,40 +303,40 @@ else
 fi
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ SSL certificates successfully installed.${NC}"
+    echo -e "${GREEN}✅ SSL-сертификаты успешно установлены.${NC}"
     systemctl reload nginx
 else
-    echo -e "${RED}❌ Failed to obtain certificates. Check port 80 and DNS.${NC}"
+    echo -e "${RED}❌ Не удалось получить сертификаты. Проверьте порт 80 и DNS.${NC}"
     exit 1
 fi
 
-# ---------------------- Restart bot ----------------------
+# ---------------------- Перезапуск бота (на всякий случай) ----------------------
 docker compose restart bot
 sleep 5
 
-# ---------------------- Set webhook ----------------------
-echo -e "${YELLOW}➜ Setting webhook in Telegram...${NC}"
+# ---------------------- Установка вебхука в Telegram ----------------------
+echo -e "${YELLOW}➜ Установка вебхука в Telegram...${NC}"
 WEBHOOK_URL="https://$WEBHOOK_DOMAIN:$HTTPS_PORT/webhook"
 RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/setWebhook" \
     -d "url=$WEBHOOK_URL&secret_token=$WEBHOOK_SECRET_TOKEN")
 if echo "$RESPONSE" | grep -q '"ok":true'; then
-    echo -e "${GREEN}✅ Webhook successfully set to $WEBHOOK_URL${NC}"
+    echo -e "${GREEN}✅ Вебхук успешно установлен на $WEBHOOK_URL${NC}"
 else
-    echo -e "${RED}❌ Failed to set webhook. Response: $RESPONSE${NC}"
-    echo -e "${YELLOW}Try manually:${NC}"
+    echo -e "${RED}❌ Не удалось установить вебхук. Ответ: $RESPONSE${NC}"
+    echo -e "${YELLOW}Попробуйте вручную:${NC}"
     echo "curl -X POST 'https://api.telegram.org/bot$BOT_TOKEN/setWebhook' -d 'url=$WEBHOOK_URL&secret_token=$WEBHOOK_SECRET_TOKEN'"
 fi
 
-# ---------------------- Final message ----------------------
+# ---------------------- Финальное сообщение ----------------------
 echo -e "${GREEN}===============================================${NC}"
-echo -e "${GREEN}✅ Installation complete!${NC}"
-echo -e "🔹 Bot webhook: https://$WEBHOOK_DOMAIN:$HTTPS_PORT"
-echo -e "🔹 Web cabinet: https://$CABINET_DOMAIN:$HTTPS_PORT"
-echo -e "🔹 Bot port (for Nginx): $HOST_BOT_PORT"
-echo -e "🔹 Architecture: $ARCH_NAME"
+echo -e "${GREEN}✅ Установка завершена!${NC}"
+echo -e "🔹 Вебхук бота: https://$WEBHOOK_DOMAIN:$HTTPS_PORT"
+echo -e "🔹 Веб-кабинет: https://$CABINET_DOMAIN:$HTTPS_PORT"
+echo -e "🔹 Порт для Nginx (к боту): $HOST_BOT_PORT"
+echo -e "🔹 Архитектура: $ARCH_NAME"
 echo -e ""
-echo -e "${YELLOW}⚠️  Important:${NC}"
-echo -e "   - Check cabinet in browser: https://$CABINET_DOMAIN:$HTTPS_PORT"
-echo -e "   - Send /start to your bot in Telegram"
-echo -e "   - Check logs if needed: docker compose logs bot"
+echo -e "${YELLOW}⚠️  Важно:${NC}"
+echo -e "   - Проверьте кабинет в браузере: https://$CABINET_DOMAIN:$HTTPS_PORT"
+echo -e "   - Отправьте /start вашему боту в Telegram"
+echo -e "   - При необходимости проверьте логи: docker compose logs bot"
 echo -e "${GREEN}===============================================${NC}"
