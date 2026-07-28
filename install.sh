@@ -1,6 +1,7 @@
+
 #!/bin/bash
-# Bedolaga Bot + Cabinet Установщик
-# Версия: 2.0.2
+# Установщик Bedolaga Bot + Cabinet
+# Версия: 2.0.3
 # Поддерживаемые архитектуры: amd64, arm64, armv7l
 # Репозиторий: https://github.com/Santey990/Remnawave-bedolaga-Auto-Installer
 # Лицензия: MIT
@@ -8,19 +9,19 @@
 set -e
 set -o pipefail
 
-# ---------------------- Цвета для вывода ----------------------
+# ---------------------- Цвета ----------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# ---------------------- Проверка прав root ----------------------
+# ---------------------- Проверка root ----------------------
 if [[ $EUID -ne 0 ]]; then
-   echo -e "${RED}❌ Этот скрипт должен запускаться с правами root (sudo).${NC}"
+   echo -e "${RED}❌ Скрипт должен запускаться с правами root (sudo).${NC}"
    exit 1
 fi
 
-# ---------------------- Определение ОС ----------------------
+# ---------------------- Определение ОС и архитектуры ----------------------
 if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     OS=$ID
@@ -33,7 +34,6 @@ if [[ "$OS" != "ubuntu" && "$OS" != "debian" ]]; then
     exit 1
 fi
 
-# ---------------------- Определение архитектуры ----------------------
 ARCH=$(uname -m)
 case "$ARCH" in
     x86_64|amd64)   ARCH_NAME="amd64" ;;
@@ -44,28 +44,37 @@ esac
 echo -e "${GREEN}✅ ОС: $OS, Архитектура: $ARCH_NAME${NC}"
 
 # ---------------------- Вспомогательные функции ----------------------
-# Проверка, занят ли порт
 is_port_in_use() {
     ss -tulpn | grep -q ":$1 "
 }
 
-# Поиск свободного порта из разрешённых Telegram (88, 8443, 443)
+# Функция поиска порта с учётом того, что если порт занят nginx – считаем его свободным
 find_telegram_port() {
     local allowed_ports=(88 8443 443)
     for port in "${allowed_ports[@]}"; do
-        if ! is_port_in_use $port; then
+        if is_port_in_use $port; then
+            # Проверяем, кто слушает порт
+            local process=$(ss -tulpn | grep ":$port " | awk '{print $7}' | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+            if [[ -n $process ]]; then
+                local proc_name=$(ps -p $process -o comm= 2>/dev/null)
+                if [[ "$proc_name" == "nginx" ]]; then
+                    >&2 echo -e "${YELLOW}⚠️ Порт $port занят Nginx (используем его).${NC}"
+                    echo "$port"
+                    return 0
+                fi
+            fi
+            >&2 echo -e "${YELLOW}⚠️ Порт $port занят другим процессом, пробуем следующий...${NC}"
+        else
             echo "$port"
             return 0
-        else
-            >&2 echo -e "${YELLOW}⚠️ Порт $port занят, пробуем следующий...${NC}"
         fi
     done
-    >&2 echo -e "${RED}❌ Все разрешённые порты (88, 8443, 443) заняты.${NC}"
+    >&2 echo -e "${RED}❌ Все разрешённые порты (88, 8443, 443) заняты другими процессами.${NC}"
     exit 1
 }
 
-# ---------------------- Запрос данных у пользователя ----------------------
-echo -e "${YELLOW}Введите основной домен (например, example.com), уже используемый для вашей ноды:${NC}"
+# ---------------------- Ввод данных ----------------------
+echo -e "${YELLOW}Введите основной домен (например, example.com), который уже используется для вашей ноды:${NC}"
 read -p "Основной домен: " MAIN_DOMAIN
 
 echo -e "${YELLOW}Введите поддомен для вебхука бота (например, hooks.$MAIN_DOMAIN):${NC}"
@@ -77,20 +86,19 @@ read -p "Поддомен кабинета: " CABINET_DOMAIN
 echo -e "${YELLOW}Введите токен бота от @BotFather:${NC}"
 read -sp "Токен бота: " BOT_TOKEN; echo
 
-echo -e "${YELLOW}Введите ваш Telegram ID (администратор):${NC}"
-read -p "ID администратора: " ADMIN_IDS
+echo -e "${YELLOW}Введите ваш Telegram ID (администратора):${NC}"
+read -p "Telegram ID: " ADMIN_IDS
 
 echo -e "${YELLOW}Введите API URL панели Remnawave (например, https://panel.$MAIN_DOMAIN):${NC}"
 read -p "API URL панели: " REMNAWAVE_API_URL
 
-echo -e "${YELLOW}Введите API ключ панели Remnawave:${NC}"
-read -sp "API ключ: " REMNAWAVE_API_KEY; echo
+echo -e "${YELLOW}Введите API KEY от панели Remnawave:${NC}"
+read -sp "API KEY: " REMNAWAVE_API_KEY; echo
 
-# Генерация секретов
 WEBHOOK_SECRET=$(openssl rand -hex 32)
 CABINET_JWT_SECRET=$(openssl rand -hex 32)
 
-# ---------------------- Docker ----------------------
+# ---------------------- Установка Docker ----------------------
 echo -e "${YELLOW}➜ Проверка Docker...${NC}"
 if ! command -v docker &> /dev/null; then
     echo -e "${YELLOW}Установка Docker...${NC}"
@@ -99,12 +107,12 @@ if ! command -v docker &> /dev/null; then
     usermod -aG docker $SUDO_USER
 fi
 if ! docker compose version &> /dev/null; then
-    echo -e "${YELLOW}Установка Docker Compose плагина...${NC}"
+    echo -e "${YELLOW}Установка Docker Compose plugin...${NC}"
     apt-get update && apt-get install -y docker-compose-plugin
 fi
 echo -e "${GREEN}✅ Docker готов.${NC}"
 
-# ---------------------- Nginx ----------------------
+# ---------------------- Установка Nginx ----------------------
 echo -e "${YELLOW}➜ Проверка Nginx...${NC}"
 if ! command -v nginx &> /dev/null; then
     apt-get update && apt-get install -y nginx
@@ -112,8 +120,8 @@ if ! command -v nginx &> /dev/null; then
 fi
 echo -e "${GREEN}✅ Nginx установлен.${NC}"
 
-# ---------------------- Certbot и плагин для Nginx ----------------------
-echo -e "${YELLOW}➜ Проверка Certbot и плагина для Nginx...${NC}"
+# ---------------------- Установка Certbot + плагин ----------------------
+echo -e "${YELLOW}➜ Проверка Certbot и плагина Nginx...${NC}"
 if ! command -v certbot &> /dev/null; then
     apt-get update && apt-get install -y certbot python3-certbot-nginx
 else
@@ -123,7 +131,7 @@ else
 fi
 echo -e "${GREEN}✅ Certbot и плагин готовы.${NC}"
 
-# ---------------------- Поиск свободного HTTPS-порта ----------------------
+# ---------------------- Выбор порта (с учётом Nginx) ----------------------
 echo -e "${YELLOW}➜ Поиск свободного HTTPS-порта (разрешённого Telegram)...${NC}"
 HTTPS_PORT=$(find_telegram_port)
 echo -e "${GREEN}✅ Выбран внешний HTTPS-порт: $HTTPS_PORT${NC}"
@@ -173,7 +181,7 @@ else
 fi
 sleep 2
 
-# ---------------------- Клонирование репозитория бота ----------------------
+# ---------------------- Клонирование бота ----------------------
 echo -e "${YELLOW}➜ Установка Bedolaga Bot...${NC}"
 cd /opt
 if [[ -d "remnawave-bedolaga-telegram-bot" ]]; then
@@ -188,7 +196,7 @@ echo -e "${YELLOW}➜ Создание папок для бэкапов, лог�
 mkdir -p data/backups logs locales
 chmod -R 777 data logs locales
 
-# ---------------------- Создание .env файла ----------------------
+# ---------------------- Создание .env ----------------------
 cat > .env <<EOF
 BOT_TOKEN=$BOT_TOKEN
 ADMIN_IDS=$ADMIN_IDS
@@ -207,7 +215,7 @@ CABINET_ALLOWED_ORIGINS=https://$CABINET_DOMAIN:$HTTPS_PORT
 WEB_API_ALLOWED_ORIGINS=https://$CABINET_DOMAIN:$HTTPS_PORT
 EOF
 
-# ---------------------- Настройка docker-compose.yml (проброс портов) ----------------------
+# ---------------------- Обновление docker-compose.yml ----------------------
 if ! grep -q "$HOST_BOT_PORT:$BOT_INTERNAL_PORT" docker-compose.yml; then
     if grep -q "ports:" docker-compose.yml; then
         sed -i "/ports:/,/^[^ ]/ s/- .*:.*/- \"$HOST_BOT_PORT:$BOT_INTERNAL_PORT\"/" docker-compose.yml
@@ -216,11 +224,12 @@ if ! grep -q "$HOST_BOT_PORT:$BOT_INTERNAL_PORT" docker-compose.yml; then
     fi
 fi
 
-# ---------------------- Запуск бота ----------------------
+# ---------------------- Запуск бота (временно, чтобы создать базу данных) ----------------------
 docker compose up -d
-echo -e "${GREEN}✅ Bedolaga Bot запущен.${NC}"
+echo -e "${GREEN}✅ Bedolaga Bot запущен (ожидаем готовности).${NC}"
+sleep 10
 
-# ---------------------- Установка Cabinet (веб-кабинет) ----------------------
+# ---------------------- Установка Cabinet ----------------------
 echo -e "${YELLOW}➜ Установка Cabinet...${NC}"
 mkdir -p /srv/cabinet
 docker pull ghcr.io/bedolaga-dev/bedolaga-cabinet:latest
@@ -230,9 +239,69 @@ docker rm tmp_cabinet
 chown -R www-data:www-data /srv/cabinet
 echo -e "${GREEN}✅ Файлы Cabinet размещены.${NC}"
 
-# ---------------------- Настройка Nginx ----------------------
-echo -e "${YELLOW}➜ Создание конфигураций Nginx (порт $HTTPS_PORT)...${NC}"
+# ---------------------- Настройка Nginx (ТОЛЬКО HTTP для получения сертификата) ----------------------
+echo -e "${YELLOW}➜ Создание временных конфигураций Nginx (только HTTP, порт 80)...${NC}"
 rm -f /etc/nginx/sites-enabled/default
+
+cat > /etc/nginx/sites-available/bedolaga-webhook <<EOF
+server {
+    listen 80;
+    server_name $WEBHOOK_DOMAIN;
+    location / {
+        proxy_pass http://127.0.0.1:$HOST_BOT_PORT;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+
+cat > /etc/nginx/sites-available/bedolaga-cabinet <<EOF
+server {
+    listen 80;
+    server_name $CABINET_DOMAIN;
+    root /srv/cabinet;
+    index index.html;
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+    location /api {
+        proxy_pass http://127.0.0.1:$HOST_BOT_PORT;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+
+ln -sf /etc/nginx/sites-available/bedolaga-webhook /etc/nginx/sites-enabled/
+ln -sf /etc/nginx/sites-available/bedolaga-cabinet /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+echo -e "${GREEN}✅ Nginx перезагружен (только HTTP).${NC}"
+
+# ---------------------- Получение SSL-сертификатов через Certbot ----------------------
+echo -e "${YELLOW}➜ Получение SSL-сертификатов...${NC}"
+if certbot certificates 2>/dev/null | grep -q "Domains:.*$MAIN_DOMAIN"; then
+    echo -e "${YELLOW}Обнаружен существующий сертификат для $MAIN_DOMAIN. Расширяем...${NC}"
+    certbot --nginx -d "$MAIN_DOMAIN" -d "$WEBHOOK_DOMAIN" -d "$CABINET_DOMAIN" \
+            --expand --non-interactive --agree-tos --email "admin@$MAIN_DOMAIN" || true
+else
+    certbot --nginx -d "$MAIN_DOMAIN" -d "$WEBHOOK_DOMAIN" -d "$CABINET_DOMAIN" \
+            --non-interactive --agree-tos --email "admin@$MAIN_DOMAIN" || true
+fi
+
+# Проверяем, что сертификат сохранён
+if [ -f "/etc/letsencrypt/live/$MAIN_DOMAIN/fullchain.pem" ]; then
+    echo -e "${GREEN}✅ SSL-сертификаты успешно получены.${NC}"
+else
+    echo -e "${RED}❌ Не удалось получить сертификаты. Проверьте порт 80 и DNS.${NC}"
+    exit 1
+fi
+
+# ---------------------- Добавление SSL и редиректа в конфиги Nginx ----------------------
+echo -e "${YELLOW}➜ Добавляем SSL и редирект в конфигурации Nginx...${NC}"
 
 cat > /etc/nginx/sites-available/bedolaga-webhook <<EOF
 server {
@@ -287,28 +356,8 @@ server {
 }
 EOF
 
-ln -sf /etc/nginx/sites-available/bedolaga-webhook /etc/nginx/sites-enabled/
-ln -sf /etc/nginx/sites-available/bedolaga-cabinet /etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx
-echo -e "${GREEN}✅ Nginx перезагружен.${NC}"
-
-# ---------------------- Получение SSL-сертификатов ----------------------
-echo -e "${YELLOW}➜ Получение SSL-сертификатов...${NC}"
-if certbot certificates 2>/dev/null | grep -q "Domains:.*$MAIN_DOMAIN"; then
-    certbot --nginx -d "$MAIN_DOMAIN" -d "$WEBHOOK_DOMAIN" -d "$CABINET_DOMAIN" \
-            --expand --non-interactive --agree-tos --email "admin@$MAIN_DOMAIN"
-else
-    certbot --nginx -d "$MAIN_DOMAIN" -d "$WEBHOOK_DOMAIN" -d "$CABINET_DOMAIN" \
-            --non-interactive --agree-tos --email "admin@$MAIN_DOMAIN"
-fi
-
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ SSL-сертификаты успешно установлены.${NC}"
-    systemctl reload nginx
-else
-    echo -e "${RED}❌ Не удалось получить сертификаты. Проверьте порт 80 и DNS.${NC}"
-    exit 1
-fi
+echo -e "${GREEN}✅ Nginx перезагружен с SSL.${NC}"
 
 # ---------------------- Перезапуск бота (на всякий случай) ----------------------
 docker compose restart bot
@@ -323,7 +372,7 @@ if echo "$RESPONSE" | grep -q '"ok":true'; then
     echo -e "${GREEN}✅ Вебхук успешно установлен на $WEBHOOK_URL${NC}"
 else
     echo -e "${RED}❌ Не удалось установить вебхук. Ответ: $RESPONSE${NC}"
-    echo -e "${YELLOW}Попробуйте вручную:${NC}"
+    echo -e "${YELLOW}Попробуйте установить вручную:${NC}"
     echo "curl -X POST 'https://api.telegram.org/bot$BOT_TOKEN/setWebhook' -d 'url=$WEBHOOK_URL&secret_token=$WEBHOOK_SECRET_TOKEN'"
 fi
 
@@ -332,11 +381,11 @@ echo -e "${GREEN}===============================================${NC}"
 echo -e "${GREEN}✅ Установка завершена!${NC}"
 echo -e "🔹 Вебхук бота: https://$WEBHOOK_DOMAIN:$HTTPS_PORT"
 echo -e "🔹 Веб-кабинет: https://$CABINET_DOMAIN:$HTTPS_PORT"
-echo -e "🔹 Порт для Nginx (к боту): $HOST_BOT_PORT"
+echo -e "🔹 Порт для доступа Nginx к боту: $HOST_BOT_PORT"
 echo -e "🔹 Архитектура: $ARCH_NAME"
 echo -e ""
 echo -e "${YELLOW}⚠️  Важно:${NC}"
 echo -e "   - Проверьте кабинет в браузере: https://$CABINET_DOMAIN:$HTTPS_PORT"
-echo -e "   - Отправьте /start вашему боту в Telegram"
+echo -e "   - Отправьте боту команду /start в Telegram"
 echo -e "   - При необходимости проверьте логи: docker compose logs bot"
 echo -e "${GREEN}===============================================${NC}"
