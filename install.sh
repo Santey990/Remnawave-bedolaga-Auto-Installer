@@ -1,9 +1,9 @@
 #!/bin/bash
 # Bedolaga Bot + Cabinet Installer
-# Version: 2.0.0
+# Version: 2.0.1
 # Supported architectures: amd64, arm64, armv7l
+# Repository: https://github.com/Santey990/Remnawave-bedolaga-Auto-Installer
 # License: MIT
-# Repository: https://github.com/ВАШ_НИК/НАЗВАНИЕ_РЕПО
 
 set -e
 set -o pipefail
@@ -65,16 +65,22 @@ find_telegram_port() {
 # ---------------------- User input ----------------------
 echo -e "${YELLOW}Enter the main domain (e.g., example.com) already used for your node:${NC}"
 read -p "Main domain: " MAIN_DOMAIN
+
 echo -e "${YELLOW}Enter the subdomain for the bot webhook (e.g., hooks.$MAIN_DOMAIN):${NC}"
 read -p "Webhook subdomain: " WEBHOOK_DOMAIN
+
 echo -e "${YELLOW}Enter the subdomain for the web cabinet (e.g., cabinet.$MAIN_DOMAIN):${NC}"
 read -p "Cabinet subdomain: " CABINET_DOMAIN
+
 echo -e "${YELLOW}Enter your bot token from @BotFather:${NC}"
 read -sp "BOT_TOKEN: " BOT_TOKEN; echo
+
 echo -e "${YELLOW}Enter your Telegram ID (admin):${NC}"
 read -p "ADMIN_IDS: " ADMIN_IDS
+
 echo -e "${YELLOW}Enter the Remnawave panel API URL (e.g., https://panel.$MAIN_DOMAIN):${NC}"
 read -p "REMNAWAVE_API_URL: " REMNAWAVE_API_URL
+
 echo -e "${YELLOW}Enter the Remnawave API KEY:${NC}"
 read -sp "REMNAWAVE_API_KEY: " REMNAWAVE_API_KEY; echo
 
