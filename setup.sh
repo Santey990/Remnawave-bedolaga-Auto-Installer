@@ -16,9 +16,6 @@ CYAN=$'\033[0;36m'
 BOLD=$'\033[1m'
 NC=$'\033[0m'
 
-# Порт для Caddy, на котором будут висеть бот и кабинет Bedolaga
-CADDY_BEDOLAGA_PORT=9443
-
 # Проверка прав root
 if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}❌ Ошибка: Скрипт нужно запускать от имени root (sudo).${NC}"
@@ -93,7 +90,6 @@ services:
         ports:
             - '0.0.0.0:443:443'
             - '0.0.0.0:80:80'
-            - "0.0.0.0:${CADDY_BEDOLAGA_PORT}:${CADDY_BEDOLAGA_PORT}"
         networks:
             - remnawave-network
         volumes:
@@ -135,16 +131,9 @@ init_caddy_blocks() {
 add_caddy_block() {
     local domain="$1"
     local block_content="$2"
-    local port="${3:-}"
     local blocks_dir="/opt/remnawave/caddy/blocks"
 
     init_caddy_blocks
-
-    # Если указан порт, подставляем его в адрес
-    if [ -n "$port" ]; then
-        block_content=$(echo "$block_content" | sed "s|https://$domain|https://$domain:$port|g")
-    fi
-
     echo "$block_content" > "$blocks_dir/$domain"
     echo -e "${GREEN}✅ Блок для $domain сохранён.${NC}"
     rebuild_caddyfile
@@ -251,7 +240,6 @@ services:
         ports:
             - '0.0.0.0:443:443'
             - '0.0.0.0:80:80'
-            - "0.0.0.0:${CADDY_BEDOLAGA_PORT}:${CADDY_BEDOLAGA_PORT}"
         networks:
             - remnawave-network
         volumes:
@@ -526,7 +514,7 @@ POSTGRES_DB=remnawave_bot
 POSTGRES_USER=remnawave_user
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 BOT_RUN_MODE=webhook
-WEBHOOK_URL=https://$BEDOLAGA_DOMAIN:$CADDY_BEDOLAGA_PORT
+WEBHOOK_URL=https://$BEDOLAGA_DOMAIN
 WEBHOOK_PATH=/webhook
 WEBHOOK_SECRET_TOKEN=$WEBHOOK_SECRET_TOKEN
 WEBHOOK_DROP_PENDING_UPDATES=true
@@ -570,14 +558,14 @@ EOF
         }
     }
 }"
-        add_caddy_block "$BEDOLAGA_DOMAIN" "$BEDOLAGA_BLOCK" "$CADDY_BEDOLAGA_PORT"
+        add_caddy_block "$BEDOLAGA_DOMAIN" "$BEDOLAGA_BLOCK"
 
         cd /opt/remnawave/caddy
         docker compose down && docker compose up -d
     fi
 
     echo -e "${GREEN}✅ Bedolaga Bot успешно установлен!${NC}"
-    echo -e "🌐 Бот: https://$BEDOLAGA_DOMAIN:$CADDY_BEDOLAGA_PORT\n"
+    echo -e "🌐 Бот: https://$BEDOLAGA_DOMAIN\n"
     read -p "Нажмите Enter для возврата в меню..."
 }
 
@@ -605,8 +593,8 @@ install_cabinet() {
 # Bedolaga Cabinet
 CABINET_ENABLED=true
 CABINET_JWT_SECRET=$CABINET_JWT_SECRET
-CABINET_ALLOWED_ORIGINS=https://$CABINET_DOMAIN:$CADDY_BEDOLAGA_PORT
-CABINET_URL=https://$CABINET_DOMAIN:$CADDY_BEDOLAGA_PORT
+CABINET_ALLOWED_ORIGINS=https://$CABINET_DOMAIN
+CABINET_URL=https://$CABINET_DOMAIN
 EOF
     fi
 
@@ -644,7 +632,7 @@ EOF
         reverse_proxy cabinet_frontend:80
     }
 }"
-    add_caddy_block "$CABINET_DOMAIN" "$CABINET_BLOCK" "$CADDY_BEDOLAGA_PORT"
+    add_caddy_block "$CABINET_DOMAIN" "$CABINET_BLOCK"
 
     cd /opt/remnawave/caddy
     docker compose down && docker compose up -d
@@ -659,7 +647,7 @@ EOF
     docker network connect bedolaga-cabinet_default caddy 2>/dev/null || true
 
     echo -e "${GREEN}✅ MiniAPP (Cabinet) успешно установлен!${NC}"
-    echo -e "🗄️  Cabinet: https://$CABINET_DOMAIN:$CADDY_BEDOLAGA_PORT\n"
+    echo -e "🗄️  Cabinet: https://$CABINET_DOMAIN\n"
     read -p "Нажмите Enter для возврата в меню..."
 }
 
@@ -757,9 +745,9 @@ setup_caddy_for_bedolaga() {
     fi
 
     echo -e "\n${CYAN}${BOLD}Найденные домены:${NC}"
-    echo -e "  🤖 Бот:      ${BOLD}$BOT_DOMAIN${NC} (порт $CADDY_BEDOLAGA_PORT)"
+    echo -e "  🤖 Бот:      ${BOLD}$BOT_DOMAIN${NC}"
     if [ -n "$CABINET_DOMAIN" ]; then
-        echo -e "  🗄️  Cabinet:  ${BOLD}$CABINET_DOMAIN${NC} (порт $CADDY_BEDOLAGA_PORT)"
+        echo -e "  🗄️  Cabinet:  ${BOLD}$CABINET_DOMAIN${NC}"
     else
         echo -e "  🗄️  Cabinet:  ${YELLOW}не установлен${NC}"
     fi
@@ -787,7 +775,7 @@ setup_caddy_for_bedolaga() {
         }
     }
 }"
-    add_caddy_block "$BOT_DOMAIN" "$BOT_BLOCK" "$CADDY_BEDOLAGA_PORT"
+    add_caddy_block "$BOT_DOMAIN" "$BOT_BLOCK"
 
     if [ -n "$CABINET_DOMAIN" ]; then
         if [ -d "/srv/cabinet" ] && [ -f "/srv/cabinet/index.html" ]; then
@@ -814,7 +802,7 @@ setup_caddy_for_bedolaga() {
     }
 }"
         fi
-        add_caddy_block "$CABINET_DOMAIN" "$CABINET_BLOCK" "$CADDY_BEDOLAGA_PORT"
+        add_caddy_block "$CABINET_DOMAIN" "$CABINET_BLOCK"
     fi
 
     echo -e "${YELLOW}🔄 Перезапускаем Caddy...${NC}"
@@ -845,8 +833,8 @@ setup_caddy_for_bedolaga() {
 # Bedolaga Cabinet (добавлено автоматически)
 CABINET_ENABLED=true
 CABINET_JWT_SECRET=$CABINET_JWT_SECRET
-CABINET_ALLOWED_ORIGINS=https://$CABINET_DOMAIN:$CADDY_BEDOLAGA_PORT
-CABINET_URL=https://$CABINET_DOMAIN:$CADDY_BEDOLAGA_PORT
+CABINET_ALLOWED_ORIGINS=https://$CABINET_DOMAIN
+CABINET_URL=https://$CABINET_DOMAIN
 EOF
             echo -e "${GREEN}✅ Настройки Cabinet добавлены. Перезапускаем бота...${NC}"
             cd /opt/bedolaga-bot
@@ -855,8 +843,8 @@ EOF
     fi
 
     echo -e "\n${GREEN}${BOLD}✅ Настройка Caddy для Bedolaga завершена!${NC}"
-    echo -e "🌐 Бот: https://$BOT_DOMAIN:$CADDY_BEDOLAGA_PORT"
-    [ -n "$CABINET_DOMAIN" ] && echo -e "🗄️  Cabinet: https://$CABINET_DOMAIN:$CADDY_BEDOLAGA_PORT"
+    echo -e "🌐 Бот: https://$BOT_DOMAIN"
+    [ -n "$CABINET_DOMAIN" ] && echo -e "🗄️  Cabinet: https://$CABINET_DOMAIN"
     echo -e "\n"
     read -p "Нажмите Enter для возврата..."
 }
