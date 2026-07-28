@@ -1,11 +1,13 @@
 #!/bin/bash
 
 # ============================================
-# Just Remnawave Auto Installer (исправлен)
-# Автор: tneangel / Santey990
-# Модификация: порты Caddy 9443 (HTTPS) и 8080 (HTTP)
+# Just Remnawave Auto Installer
+# Author: tneangel
+# Modified by Santey990
+# Repository: https://github.com/Santey990/Remnawave-bedolaga-Auto-Installer
 # ============================================
 
+# Цвета (используем $'...' для корректной интерпретации escape-последовательностей)
 RED=$'\033[0;31m'
 GREEN=$'\033[0;32m'
 YELLOW=$'\033[1;33m'
@@ -14,10 +16,7 @@ CYAN=$'\033[0;36m'
 BOLD=$'\033[1m'
 NC=$'\033[0m'
 
-# Фиксированные порты Caddy (не конфликтуют с ядром на 443)
-CADDY_HTTPS_PORT=9443
-CADDY_HTTP_PORT=8080
-
+# Проверка прав root
 if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}❌ Ошибка: Скрипт нужно запускать от имени root (sudo).${NC}"
     exit 1
@@ -38,7 +37,7 @@ show_logo() {
     clear
     echo -e "${CYAN}${BOLD}"
     echo "  ╔═══════════════════════════════════════════════════════════╗"
-    echo "  ║   ⚡ Remnawave + Bedolaga Auto Installer (port 9443)   ║"
+    echo "  ║   ⚡ Remnawave + Bedolaga Auto Installer by Santey990   ║"
     echo "  ╚═══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -89,8 +88,8 @@ services:
         hostname: caddy
         restart: always
         ports:
-            - '0.0.0.0:$CADDY_HTTPS_PORT:443'
-            - '0.0.0.0:$CADDY_HTTP_PORT:80'
+            - '0.0.0.0:443:443'
+            - '0.0.0.0:80:80'
         networks:
             - remnawave-network
         volumes:
@@ -111,7 +110,7 @@ EOF
             init_caddy_blocks
             rebuild_caddyfile
             docker compose up -d
-            echo -e "${GREEN}✅ Caddy установлен и запущен на HTTPS:$CADDY_HTTPS_PORT, HTTP:$CADDY_HTTP_PORT${NC}"
+            echo -e "${GREEN}✅ Caddy установлен и запущен.${NC}"
         else
             echo -e "${RED}❌ Без Caddy бот и кабинет не будут работать. Выход.${NC}"
             read -p "Нажмите Enter для возврата..."
@@ -157,7 +156,7 @@ rebuild_caddyfile() {
     local blocks_dir="/opt/remnawave/caddy/blocks"
     local caddyfile="/opt/remnawave/caddy/Caddyfile"
 
-    echo "# Remnawave Caddy Configuration (port $CADDY_HTTPS_PORT)" > "$caddyfile"
+    echo "# Remnawave Caddy Configuration" > "$caddyfile"
     echo "# Auto-generated - do not edit manually" >> "$caddyfile"
     echo "" >> "$caddyfile"
 
@@ -170,14 +169,14 @@ rebuild_caddyfile() {
         done
     fi
 
-    cat >> "$caddyfile" <<EOF
-:$CADDY_HTTPS_PORT {
+    cat >> "$caddyfile" << 'EOF'
+:443 {
     tls internal
     respond 204
 }
 EOF
 
-    echo -e "${GREEN}✅ Caddyfile пересобран (порт $CADDY_HTTPS_PORT).${NC}"
+    echo -e "${GREEN}✅ Caddyfile пересобран.${NC}"
 }
 
 # ============================================
@@ -222,7 +221,7 @@ install_panel() {
     echo -e "${GREEN}✅ Панель запущена. Ожидаем инициализацию БД...${NC}"
     sleep 20
 
-    echo -e "\n${YELLOW}🔧 Шаг 5. Настраиваем Caddy (HTTPS на порту $CADDY_HTTPS_PORT)...${NC}"
+    echo -e "\n${YELLOW}🔧 Шаг 5. Настраиваем Caddy (HTTPS)...${NC}"
     mkdir -p /opt/remnawave/caddy && cd /opt/remnawave/caddy
     init_caddy_blocks
 
@@ -239,8 +238,8 @@ services:
         hostname: caddy
         restart: always
         ports:
-            - '0.0.0.0:$CADDY_HTTPS_PORT:443'
-            - '0.0.0.0:$CADDY_HTTP_PORT:80'
+            - '0.0.0.0:443:443'
+            - '0.0.0.0:80:80'
         networks:
             - remnawave-network
         volumes:
@@ -258,10 +257,10 @@ volumes:
         name: caddy-ssl-data
 EOF
     docker compose up -d
-    echo -e "${GREEN}✅ Caddy запущен. HTTPS на порту $CADDY_HTTPS_PORT готов.${NC}"
+    echo -e "${GREEN}✅ Caddy запущен. HTTPS готов.${NC}"
 
     echo -e "\n${YELLOW}${BOLD}⚠️  ВАЖНО: Создайте API Token в админке!${NC}"
-    echo -e "1. Откройте в браузере: ${CYAN}https://$PANEL_DOMAIN:$CADDY_HTTPS_PORT${NC}"
+    echo -e "1. Откройте в браузере: ${CYAN}https://$PANEL_DOMAIN${NC}"
     echo -e "2. Зарегистрируйтесь (первый вход)"
     echo -e "3. Перейдите в ${BOLD}Settings → API Tokens${NC} и создайте токен"
     echo -e "4. Скопируйте его и вставьте ниже\n"
@@ -316,8 +315,8 @@ EOF
     echo -e "\n${GREEN}${BOLD}╔═══════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}${BOLD}║        ✅ УСТАНОВКА ПАНЕЛИ ЗАВЕРШЕНА! 🎉                     ║${NC}"
     echo -e "${GREEN}${BOLD}╚═══════════════════════════════════════════════════════════════╝${NC}"
-    echo -e "${CYAN}🌐 Админка:  ${BOLD}https://$PANEL_DOMAIN:$CADDY_HTTPS_PORT${NC}"
-    echo -e "${CYAN}📄 Подписка: ${BOLD}https://$SUB_DOMAIN:$CADDY_HTTPS_PORT${NC}"
+    echo -e "${CYAN}🌐 Админка:  ${BOLD}https://$PANEL_DOMAIN${NC}"
+    echo -e "${CYAN}📄 Подписка: ${BOLD}https://$SUB_DOMAIN${NC}"
     echo -e "${GREEN}${BOLD}═════════════════════════════════════════════════════════════════${NC}\n"
     read -p "Нажмите Enter для возврата в меню..."
 }
@@ -490,8 +489,7 @@ install_bedolaga() {
         echo -e "${GREEN}✅ Используется внутренний адрес: $REMNAWAVE_API_URL${NC}"
     else
         read -p "🌐 Введите домен панели Remnawave: " PANEL_DOMAIN
-        REMNAWAVE_API_URL="https://$PANEL_DOMAIN:$CADDY_HTTPS_PORT"
-        echo -e "${YELLOW}⚠️  Используется порт $CADDY_HTTPS_PORT${NC}"
+        REMNAWAVE_API_URL="https://$PANEL_DOMAIN"
     fi
 
     read -p "🤖 BOT_TOKEN (от @BotFather): " BOT_TOKEN
@@ -567,7 +565,7 @@ EOF
     fi
 
     echo -e "${GREEN}✅ Bedolaga Bot успешно установлен!${NC}"
-    echo -e "🌐 Бот: https://$BEDOLAGA_DOMAIN:$CADDY_HTTPS_PORT\n"
+    echo -e "🌐 Бот: https://$BEDOLAGA_DOMAIN\n"
     read -p "Нажмите Enter для возврата в меню..."
 }
 
@@ -649,7 +647,7 @@ EOF
     docker network connect bedolaga-cabinet_default caddy 2>/dev/null || true
 
     echo -e "${GREEN}✅ MiniAPP (Cabinet) успешно установлен!${NC}"
-    echo -e "🗄️  Cabinet: https://$CABINET_DOMAIN:$CADDY_HTTPS_PORT\n"
+    echo -e "🗄️  Cabinet: https://$CABINET_DOMAIN\n"
     read -p "Нажмите Enter для возврата в меню..."
 }
 
@@ -812,7 +810,7 @@ setup_caddy_for_bedolaga() {
     if [ -f "docker-compose.yml" ]; then
         docker compose down 2>/dev/null
         docker compose up -d
-        echo -e "${GREEN}✅ Caddy перезапущен на порту $CADDY_HTTPS_PORT.${NC}"
+        echo -e "${GREEN}✅ Caddy перезапущен.${NC}"
     else
         echo -e "${RED}❌ Файл docker-compose.yml для Caddy не найден.${NC}"
         echo -e "Пожалуйста, установите Caddy через установку панели."
@@ -845,9 +843,252 @@ EOF
     fi
 
     echo -e "\n${GREEN}${BOLD}✅ Настройка Caddy для Bedolaga завершена!${NC}"
-    echo -e "🌐 Бот: https://$BOT_DOMAIN:$CADDY_HTTPS_PORT"
-    [ -n "$CABINET_DOMAIN" ] && echo -e "🗄️  Cabinet: https://$CABINET_DOMAIN:$CADDY_HTTPS_PORT"
+    echo -e "🌐 Бот: https://$BOT_DOMAIN"
+    [ -n "$CABINET_DOMAIN" ] && echo -e "🗄️  Cabinet: https://$CABINET_DOMAIN"
     echo -e "\n"
+    read -p "Нажмите Enter для возврата..."
+}
+
+# ============================================
+# ИСПРАВЛЕННАЯ ФУНКЦИЯ: CLOUDFLARE DDNS (ВЫБОР ЗАПИСЕЙ)
+# ============================================
+install_cloudflare_ddns() {
+    show_logo
+    echo -e "${BLUE}${BOLD}🌐 Настройка Cloudflare DDNS (выбор записей)${NC}\n"
+    echo -e "Этот скрипт покажет все DNS-записи в зоне и позволит выбрать,"
+    echo -e "какие из них автоматически обновлять при смене IP.\n"
+
+    if ! command -v jq &> /dev/null; then
+        echo -e "${YELLOW}📦 Устанавливаем jq...${NC}"
+        apt-get update -qq && apt-get install -y -qq jq curl >/dev/null 2>&1
+    fi
+
+    read -p "🔑 Введите ваш Cloudflare API Token (с правами Zone:Read и DNS:Edit): " CF_API_TOKEN
+    if [ -z "$CF_API_TOKEN" ]; then
+        echo -e "${RED}❌ API Token обязателен!${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    read -p "🌐 Введите домен зоны (например, example.com): " ZONE_NAME
+    if [ -z "$ZONE_NAME" ]; then
+        echo -e "${RED}❌ Домен зоны обязателен!${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    echo -e "\n${YELLOW}⏳ Проверяем API токен и получаем zone_id...${NC}"
+    ZONE_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$ZONE_NAME" \
+        -H "Authorization: Bearer $CF_API_TOKEN" \
+        -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+    if [ -z "$ZONE_ID" ] || [ "$ZONE_ID" == "null" ]; then
+        echo -e "${RED}❌ Не удалось получить zone_id. Проверьте API токен и домен.${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+    echo -e "${GREEN}✅ Zone ID получен: $ZONE_ID${NC}"
+
+    echo -e "\n${BOLD}Какой тип записей показывать?${NC}"
+    echo "  1) Только A (IPv4)"
+    echo "  2) Только AAAA (IPv6)"
+    echo "  3) Все (A и AAAA)"
+    read -p "${CYAN}▶${NC} Ваш выбор (1-3): " type_choice
+    case $type_choice in
+        1) RECORD_TYPES="A" ;;
+        2) RECORD_TYPES="AAAA" ;;
+        3) RECORD_TYPES="A,AAAA" ;;
+        *) echo -e "${RED}❌ Неверный выбор. Используем A.${NC}"; RECORD_TYPES="A" ;;
+    esac
+
+    echo -e "\n${YELLOW}📡 Получаем список записей...${NC}"
+    RECORDS_JSON="[]"
+    IFS=',' read -ra TYPES <<< "$RECORD_TYPES"
+    for TYPE in "${TYPES[@]}"; do
+        RESP=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=$TYPE&per_page=100" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json")
+        if echo "$RESP" | jq -e '.success == true' >/dev/null; then
+            RECORDS_JSON=$(echo "$RECORDS_JSON" | jq --argjson new "$(echo "$RESP" | jq '.result')" '. + $new')
+        else
+            ERR_MSG=$(echo "$RESP" | jq -r '.errors[0].message // "Неизвестная ошибка"')
+            echo -e "${RED}❌ Ошибка получения записей типа $TYPE: $ERR_MSG${NC}"
+        fi
+    done
+
+    RECORD_COUNT=$(echo "$RECORDS_JSON" | jq 'length')
+    if ! [[ "$RECORD_COUNT" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}❌ Не удалось получить количество записей. Проверьте токен и зону.${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    if [ "$RECORD_COUNT" -eq 0 ]; then
+        echo -e "${RED}❌ В зоне $ZONE_NAME не найдено записей типов $RECORD_TYPES.${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    echo -e "\n${CYAN}${BOLD}Список записей в зоне $ZONE_NAME:${NC}"
+    echo "  № | Имя записи                | Тип | Содержимое"
+    echo "----+---------------------------+-----+------------------"
+    INDEX=1
+    declare -a RECORD_NAMES_ARRAY
+    while IFS= read -r line; do
+        NAME=$(echo "$line" | jq -r '.name')
+        TYPE=$(echo "$line" | jq -r '.type')
+        CONTENT=$(echo "$line" | jq -r '.content')
+        printf "  %2d | %-25s | %-3s | %s\n" $INDEX "$NAME" "$TYPE" "$CONTENT"
+        RECORD_NAMES_ARRAY[$INDEX]="$NAME:$TYPE"
+        ((INDEX++))
+    done < <(echo "$RECORDS_JSON" | jq -c '.[]')
+
+    echo ""
+    read -p "Введите номера записей, которые нужно обновлять (через запятую, например 1,3,5) или 'all' для всех: " SELECTION
+    if [ -z "$SELECTION" ]; then
+        echo -e "${RED}❌ Выбор не сделан. Отмена.${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    SELECTED_RECORDS=()
+    if [ "$SELECTION" == "all" ]; then
+        for i in "${!RECORD_NAMES_ARRAY[@]}"; do
+            if [ -n "${RECORD_NAMES_ARRAY[$i]}" ]; then
+                SELECTED_RECORDS+=("${RECORD_NAMES_ARRAY[$i]}")
+            fi
+        done
+    else
+        IFS=',' read -ra INDICES <<< "$SELECTION"
+        for idx in "${INDICES[@]}"; do
+            idx=$(echo "$idx" | xargs)
+            if [[ "$idx" =~ ^[0-9]+$ ]] && [ "$idx" -ge 1 ] && [ "$idx" -lt "$INDEX" ]; then
+                SELECTED_RECORDS+=("${RECORD_NAMES_ARRAY[$idx]}")
+            else
+                echo -e "${YELLOW}⚠️  Номер $idx неверен, пропускаем.${NC}"
+            fi
+        done
+    fi
+
+    if [ ${#SELECTED_RECORDS[@]} -eq 0 ]; then
+        echo -e "${RED}❌ Не выбрано ни одной корректной записи. Отмена.${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    echo -e "\n${GREEN}Будут обновляться записи:${NC}"
+    for rec in "${SELECTED_RECORDS[@]}"; do
+        echo "  - $rec"
+    done
+    read -p "Продолжить? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Отмена.${NC}"
+        read -p "Нажмите Enter для возврата..."
+        return
+    fi
+
+    mkdir -p /opt/cloudflare-ddns
+
+    cat > /opt/cloudflare-ddns/update.sh <<'EOF'
+#!/bin/bash
+
+CF_API_TOKEN="__TOKEN__"
+ZONE_ID="__ZONE_ID__"
+RECORDS="__RECORDS__"
+
+get_ip() {
+    local type=$1
+    if [ "$type" == "A" ]; then
+        curl -s -4 https://api.ipify.org
+    elif [ "$type" == "AAAA" ]; then
+        curl -s -6 https://api6.ipify.org
+    else
+        echo ""
+    fi
+}
+
+for record in $RECORDS; do
+    NAME=$(echo $record | cut -d: -f1)
+    TYPE=$(echo $record | cut -d: -f2)
+    CURRENT_IP=$(get_ip $TYPE)
+    if [ -z "$CURRENT_IP" ]; then
+        echo "❌ Не удалось получить IP для $NAME ($TYPE)"
+        continue
+    fi
+
+    RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=$TYPE&name=$NAME" \
+        -H "Authorization: Bearer $CF_API_TOKEN" \
+        -H "Content-Type: application/json" | jq -r '.result[0].id')
+
+    if [ -z "$RECORD_ID" ] || [ "$RECORD_ID" == "null" ]; then
+        echo "❌ Запись $NAME не найдена. Создаём..."
+        curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"type\":\"$TYPE\",\"name\":\"$NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}" > /dev/null
+        echo "✅ Запись $NAME создана с IP $CURRENT_IP"
+    else
+        curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID" \
+            -H "Authorization: Bearer $CF_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"type\":\"$TYPE\",\"name\":\"$NAME\",\"content\":\"$CURRENT_IP\",\"ttl\":120,\"proxied\":false}" > /dev/null
+        echo "✅ Запись $NAME обновлена: $CURRENT_IP"
+    fi
+done
+EOF
+
+    RECORDS_STR=""
+    for rec in "${SELECTED_RECORDS[@]}"; do
+        RECORDS_STR="$RECORDS_STR $rec"
+    done
+    RECORDS_STR=$(echo "$RECORDS_STR" | sed 's/^ //')
+
+    sed -i "s|__TOKEN__|$CF_API_TOKEN|g" /opt/cloudflare-ddns/update.sh
+    sed -i "s|__ZONE_ID__|$ZONE_ID|g" /opt/cloudflare-ddns/update.sh
+    sed -i "s|__RECORDS__|$RECORDS_STR|g" /opt/cloudflare-ddns/update.sh
+
+    chmod +x /opt/cloudflare-ddns/update.sh
+
+    cat > /etc/systemd/system/cloudflare-ddns.service <<EOF
+[Unit]
+Description=Cloudflare DDNS Updater (multi-record)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/cloudflare-ddns/update.sh
+User=root
+EOF
+
+    cat > /etc/systemd/system/cloudflare-ddns.timer <<EOF
+[Unit]
+Description=Cloudflare DDNS timer (every 5 minutes)
+Requires=cloudflare-ddns.service
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable cloudflare-ddns.timer
+    systemctl start cloudflare-ddns.timer
+
+    echo -e "${YELLOW}🔄 Выполняем первое обновление...${NC}"
+    /opt/cloudflare-ddns/update.sh
+
+    echo -e "\n${GREEN}${BOLD}✅ Cloudflare DDNS настроен для выбранных записей:${NC}"
+    for rec in "${SELECTED_RECORDS[@]}"; do
+        echo "  - $rec"
+    done
+    echo -e "⏱️  Обновление каждые 5 минут (таймер active)"
+    echo -e "📋 Лог: journalctl -u cloudflare-ddns -f"
+    echo -e "🔄 Принудительный запуск: systemctl start cloudflare-ddns"
+    echo -e ""
     read -p "Нажмите Enter для возврата..."
 }
 
@@ -869,7 +1110,7 @@ install_admin_bot() {
         API_BASE_URL="http://remnawave:3000"
     else
         read -p "🌐 Введите домен панели: " PANEL_DOMAIN
-        API_BASE_URL="https://$PANEL_DOMAIN:$CADDY_HTTPS_PORT"
+        API_BASE_URL="https://$PANEL_DOMAIN"
     fi
 
     read -p "🤖 BOT_TOKEN (от @BotFather): " BOT_TOKEN
@@ -929,7 +1170,7 @@ EOF
     fi
 
     echo -e "${GREEN}✅ Remnawave Admin Web + Bot установлен!${NC}"
-    echo -e "🌐 Веб-панель: https://$ADMIN_DOMAIN:$CADDY_HTTPS_PORT\n"
+    echo -e "🌐 Веб-панель: https://$ADMIN_DOMAIN\n"
     read -p "Нажмите Enter для возврата в меню..."
 }
 
@@ -1273,7 +1514,7 @@ show_remnawave_menu() {
     while true; do
         show_logo
         echo -e "${BLUE}${BOLD}🚀 Remnawave${NC}\n"
-        echo -e "  ${CYAN}1)${NC} 🚀 Установить Панель + Страницу подписки (порт $CADDY_HTTPS_PORT)"
+        echo -e "  ${CYAN}1)${NC} 🚀 Установить Панель + Страницу подписки"
         echo -e "  ${CYAN}2)${NC} 🖥️  Установить Ноду"
         echo -e "  ${CYAN}3)${NC} 🔄 Обновить компоненты"
         echo -e "  ${CYAN}0)${NC} 🔙 Назад"
