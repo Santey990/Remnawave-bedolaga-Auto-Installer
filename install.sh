@@ -1,7 +1,6 @@
-
 #!/bin/bash
 # Установщик Bedolaga Bot + Cabinet
-# Версия: 2.0.3
+# Версия: 2.0.4
 # Поддерживаемые архитектуры: amd64, arm64, armv7l
 # Репозиторий: https://github.com/Santey990/Remnawave-bedolaga-Auto-Installer
 # Лицензия: MIT
@@ -104,7 +103,11 @@ if ! command -v docker &> /dev/null; then
     echo -e "${YELLOW}Установка Docker...${NC}"
     curl -fsSL https://get.docker.com -o get-docker.sh
     sh get-docker.sh
-    usermod -aG docker $SUDO_USER
+    if [[ -n "$SUDO_USER" ]]; then
+        usermod -aG docker "$SUDO_USER"
+    else
+        usermod -aG docker "$USER"
+    fi
 fi
 if ! docker compose version &> /dev/null; then
     echo -e "${YELLOW}Установка Docker Compose plugin...${NC}"
@@ -150,6 +153,10 @@ if ! command -v dig &> /dev/null; then
     apt-get update && apt-get install -y dnsutils
 fi
 SERVER_IP=$(curl -s ifconfig.me)
+if [[ -z "$SERVER_IP" ]]; then
+    echo -e "${RED}❌ Не удалось получить внешний IP сервера.${NC}"
+    exit 1
+fi
 for domain in "$WEBHOOK_DOMAIN" "$CABINET_DOMAIN"; do
     if ! dig +short "$domain" | grep -q "$SERVER_IP"; then
         echo -e "${RED}⚠️ DNS-запись для $domain не указывает на этот сервер.${NC}"
@@ -174,7 +181,11 @@ elif command -v iptables &> /dev/null; then
             iptables -I INPUT -p tcp --dport $port -j ACCEPT
         fi
     done
-    command -v netfilter-persistent &> /dev/null && netfilter-persistent save
+    if command -v netfilter-persistent &> /dev/null; then
+        netfilter-persistent save
+    elif command -v iptables-save &> /dev/null; then
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+    fi
     echo -e "${GREEN}✅ Порты открыты через iptables.${NC}"
 else
     echo -e "${YELLOW}⚠️ Не найден фаервол, откройте порты 80, $HTTPS_PORT и $HOST_BOT_PORT вручную.${NC}"
@@ -194,7 +205,7 @@ fi
 # ---------------------- Создание папок с правами ----------------------
 echo -e "${YELLOW}➜ Создание папок для бэкапов, логов и локалей...${NC}"
 mkdir -p data/backups logs locales
-chmod -R 777 data logs locales
+chmod -R 775 data logs locales   # безопаснее, чем 777
 
 # ---------------------- Создание .env ----------------------
 cat > .env <<EOF
@@ -215,14 +226,18 @@ CABINET_ALLOWED_ORIGINS=https://$CABINET_DOMAIN:$HTTPS_PORT
 WEB_API_ALLOWED_ORIGINS=https://$CABINET_DOMAIN:$HTTPS_PORT
 EOF
 
-# ---------------------- Обновление docker-compose.yml ----------------------
+# ---------------------- Обновление docker-compose.yml (БЕЗОПАСНОЕ) ----------------------
+echo -e "${YELLOW}➜ Обновляем docker-compose.yml для проброса порта...${NC}"
 if ! grep -q "$HOST_BOT_PORT:$BOT_INTERNAL_PORT" docker-compose.yml; then
     if grep -q "ports:" docker-compose.yml; then
-        sed -i "/ports:/,/^[^ ]/ s/- .*:.*/- \"$HOST_BOT_PORT:$BOT_INTERNAL_PORT\"/" docker-compose.yml
+        # Если блок ports уже существует, добавляем строку после "ports:"
+        sed -i "/ports:/a \      - \"$HOST_BOT_PORT:$BOT_INTERNAL_PORT\"" docker-compose.yml
     else
+        # Если блока ports нет, создаём его после строки "image:"
         sed -i "/image:/a \    ports:\n      - \"$HOST_BOT_PORT:$BOT_INTERNAL_PORT\"" docker-compose.yml
     fi
 fi
+echo -e "${GREEN}✅ Порт $HOST_BOT_PORT:$BOT_INTERNAL_PORT добавлен в compose.${NC}"
 
 # ---------------------- Запуск бота (временно, чтобы создать базу данных) ----------------------
 docker compose up -d
@@ -367,13 +382,13 @@ sleep 5
 echo -e "${YELLOW}➜ Установка вебхука в Telegram...${NC}"
 WEBHOOK_URL="https://$WEBHOOK_DOMAIN:$HTTPS_PORT/webhook"
 RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/setWebhook" \
-    -d "url=$WEBHOOK_URL&secret_token=$WEBHOOK_SECRET_TOKEN")
+    -d "url=$WEBHOOK_URL&secret_token=$WEBHOOK_SECRET")
 if echo "$RESPONSE" | grep -q '"ok":true'; then
     echo -e "${GREEN}✅ Вебхук успешно установлен на $WEBHOOK_URL${NC}"
 else
     echo -e "${RED}❌ Не удалось установить вебхук. Ответ: $RESPONSE${NC}"
     echo -e "${YELLOW}Попробуйте установить вручную:${NC}"
-    echo "curl -X POST 'https://api.telegram.org/bot$BOT_TOKEN/setWebhook' -d 'url=$WEBHOOK_URL&secret_token=$WEBHOOK_SECRET_TOKEN'"
+    echo "curl -X POST 'https://api.telegram.org/bot$BOT_TOKEN/setWebhook' -d 'url=$WEBHOOK_URL&secret_token=$WEBHOOK_SECRET'"
 fi
 
 # ---------------------- Финальное сообщение ----------------------
